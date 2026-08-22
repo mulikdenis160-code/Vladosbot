@@ -1,1 +1,2 @@
 - [Gemini signal-analysis limits](gemini-rate-limits.md) — back off after temporary Gemini quota responses; do not burst retries during signal search.
+- [Replit Gemini proxy](replit-gemini-proxy.md) — uses the proxy `/models` route and explicit Gemini message roles.

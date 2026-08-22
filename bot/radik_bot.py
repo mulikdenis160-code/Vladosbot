@@ -36,6 +36,7 @@ RAW_SSID = os.getenv("POCKET_SSID", "").strip()
 DEMO = os.getenv("POCKET_DEMO", "true").lower() in {"1", "true", "yes"}
 API_PORT = int(os.getenv("API_PORT", "8765"))
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+REPLIT_GEMINI_MODEL = os.getenv("GEMINI_REPLIT_MODEL", "gemini-2.5-flash")
 MIN_PAYOUT = float(os.getenv("MIN_PAYOUT", "92"))
 MAX_PRICE_AGE_SEC = int(os.getenv("MAX_PRICE_AGE_SEC", "20"))
 CANDLE_TIMEOUT_SEC = int(os.getenv("CANDLE_FETCH_TIMEOUT_SEC", "8"))
@@ -213,9 +214,21 @@ def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
     if now < gemini_next_request_at:
         raise RuntimeError("Gemini cooldown")
     gemini_next_request_at = now + GEMINI_MIN_REQUEST_INTERVAL_SEC
-    key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY не настроен")
+    replit_base_url = os.getenv("AI_INTEGRATIONS_GEMINI_BASE_URL", "").strip().rstrip("/")
+    replit_key = os.getenv("AI_INTEGRATIONS_GEMINI_API_KEY", "").strip()
+    if replit_base_url and replit_key:
+        model = REPLIT_GEMINI_MODEL
+        api_url = f"{replit_base_url}/models/{model}:generateContent"
+        headers = {"x-goog-api-key": replit_key}
+        source = "replit-gemini"
+    else:
+        key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not key:
+            raise RuntimeError("Gemini API не настроен")
+        model = GEMINI_MODEL
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        headers = {}
+        source = "gemini"
     prompt = (
         "Ти аналізуєш короткостроковий ринок бінарних опціонів. "
         "Це освітній аналітичний сигнал, а не гарантія прибутку. "
@@ -225,9 +238,10 @@ def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
         f"волатильність {snapshot['volatility']}, останні закриття {snapshot['closes']}."
     )
     response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-        params={"key": key},
-        json={"contents": [{"parts": [{"text": prompt}]}],
+        api_url,
+        params={} if source == "replit-gemini" else {"key": key},
+        headers=headers,
+        json={"contents": [{"role": "user", "parts": [{"text": prompt}]}],
               "generationConfig": {"responseMimeType": "application/json"}},
         timeout=25,
     )
@@ -254,7 +268,7 @@ def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
         "direction": direction,
         "confidence": max(0, min(100, int(result.get("confidence", 0)))),
         "reason": str(result.get("reason", "Аналіз завершено")),
-        "source": "gemini",
+        "source": source,
     }
 
 
