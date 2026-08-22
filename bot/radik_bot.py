@@ -46,6 +46,7 @@ SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
 GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC", "15"))
 SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
+PRICE_RETRY_TIMEOUT_SEC = max(1, int(os.getenv("PRICE_RETRY_TIMEOUT_SEC", "10")))
 MAX_OVERLAYS = min(2, max(0, int(os.getenv("MAX_OVERLAYS", "2"))))
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_BRIDGE_URL = os.getenv("TELEGRAM_BRIDGE_URL", "http://127.0.0.1:8010").rstrip("/")
@@ -211,6 +212,42 @@ def market_snapshot(active: str) -> dict[str, Any]:
         "closes": closes, "trend": "up" if closes[-1] >= closes[-5] else "down",
         "volatility": statistics.pstdev(closes[-12:]),
     }
+
+
+def latest_market_price(active: str) -> float:
+    """Read the live tick without waiting for a fresh candle-history request."""
+    if not connected or api is None:
+        raise RuntimeError(last_error or "Не подключено")
+    market = global_value.pairs.get(active) or {}
+    history = market.get("history") or []
+    live = next(
+        (item for item in reversed(history)
+         if isinstance(item, dict) and item.get("price") is not None),
+        None,
+    )
+    if not live:
+        raise RuntimeError("Нет live-котировки")
+    price = float(live["price"])
+    server_now = float(api.get_server_timestamp() or time.time())
+    tick_time = float(live.get("time") or 0)
+    age = max(0.0, server_now - tick_time) if tick_time else MAX_PRICE_AGE_SEC + 1
+    if age > MAX_PRICE_AGE_SEC:
+        raise RuntimeError("Котировка устарела")
+    price_cache[active], price_times[active] = price, time.time()
+    return price
+
+
+def wait_for_market_price(active: str) -> float:
+    deadline = time.monotonic() + PRICE_RETRY_TIMEOUT_SEC
+    last_error_message = "Нет live-котировки"
+    while True:
+        try:
+            return latest_market_price(active)
+        except Exception as exc:
+            last_error_message = str(exc) or type(exc).__name__
+            if time.monotonic() >= deadline:
+                raise RuntimeError(last_error_message) from exc
+            time.sleep(0.5)
 
 
 def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -474,7 +511,7 @@ def generate_best_signal() -> Optional[dict[str, Any]]:
 
 
 def close_price(active: str) -> float:
-    return float(market_snapshot(active)["price"])
+    return wait_for_market_price(active)
 
 
 def evaluate_signal(signal: dict[str, Any]) -> bool:
@@ -556,11 +593,14 @@ def signal_loop() -> None:
                 next_signal_at = now + 2
                 continue
             try:
-                pending["entry_price"] = close_price(pending["raw_pair"])
+                pending["entry_price"] = wait_for_market_price(pending["raw_pair"])
             except Exception as exc:
                 with signal_state_lock:
                     pending_signal = None
-                log.warning("Не вдалося отримати ціну на початку свічки: %s", type(exc).__name__)
+                log.warning(
+                    "Не вдалося отримати ціну на початку свічки: %s: %s",
+                    type(exc).__name__, str(exc)[:160],
+                )
                 next_signal_at = now + 5
                 continue
             pending["created_at"] = pending["entry_at"]

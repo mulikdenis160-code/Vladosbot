@@ -1,2 +1,3 @@
 - [Gemini signal-analysis limits](gemini-rate-limits.md) — back off after temporary Gemini quota responses; do not burst retries during signal search.
 - [Replit Gemini proxy](replit-gemini-proxy.md) — uses the proxy `/models` route and explicit Gemini message roles.
+- [Pocket Option live prices](pocket-option-live-prices.md) — candle-history requests can time out at minute boundaries; use the live tick stream for entry and expiry checks.
