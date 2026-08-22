@@ -49,7 +49,7 @@ packages = ["freetype", "glibcLocales", "lcms2", "libimagequant", "libjpeg", "li
 [userenv.shared]
 MAX_OVERLAYS = "2"
 SIGNAL_DURATION_SEC = "120"
-SIGNAL_END_HOUR = "04:25"
+SIGNAL_END_HOUR = "23:00"
 SIGNAL_START_HOUR = "09:00"
 SIGNAL_TIMEZONE = "Europe/Kyiv"
 TELEGRAM_BRIDGE_URL = "http://127.0.0.1:8010"
