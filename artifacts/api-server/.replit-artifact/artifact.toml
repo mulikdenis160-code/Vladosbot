@@ -1,12 +1,12 @@
 kind = "api"
-previewPath = "/api" # TODO - should be excluded from preview in the first place
-title = "API Server"
+previewPath = "/api"
+title = "RADIK AI BOT"
 version = "1.0.0"
 id = "3B4_FFSkEVBkAeYMFRJ2e"
 
 [[services]]
 localPort = 8080
-name = "API Server"
+name = "RADIK AI BOT"
 paths = ["/api"]
 
 [services.development]
@@ -21,11 +21,12 @@ args = ["pnpm", "--filter", "@workspace/api-server", "run", "build"]
 NODE_ENV = "production"
 
 [services.production.run]
-# we don't run through pnpm to make startup faster in production
-args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+args = ["sh", "-c", "node bot/telegram_bridge.mjs & exec uv run python bot/radik_bot.py"]
 
 [services.production.run.env]
 PORT = "8080"
+API_PORT = "8080"
+TELEGRAM_BRIDGE_PORT = "8010"
 NODE_ENV = "production"
 
 [services.production.health.startup]

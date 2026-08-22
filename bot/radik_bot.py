@@ -556,6 +556,7 @@ CORS(app)
 
 
 @app.get("/health")
+@app.get("/api/healthz")
 def health():
     latest = max(price_times.values(), default=0)
     return jsonify({
