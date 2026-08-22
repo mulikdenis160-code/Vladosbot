@@ -1,10 +1,10 @@
 ---
-name: Pocket Option live prices
+name: Pocket Option price freshness
 description: Reliable price capture for signal entry and expiry checks around one-minute candle boundaries.
 ---
 
-For signal execution tracking, read the latest live tick from Pocket Option's connected market history rather than requiring a fresh candle-history request at the exact minute boundary. A short retry window is appropriate for transient tick delays.
+For signal execution tracking, refresh the pair history before recording entry and expiry prices, and require a quote timestamp at or after the relevant boundary. A short retry window is appropriate for transient delays.
 
-**Why:** Full candle-history requests can time out or return incomplete data when a new candle starts, which can silently prevent entry activation and therefore skip result and overlay handling.
+**Why:** The bundled Pocket Option client retains old history between refreshes, so reusing its cached last tick can compare identical stale prices and produce false losses or overlays.
 
-**How to apply:** Use the live tick path for the entry price and expiry price; reserve candle-history requests for signal analysis where recent closes and volatility are needed.
+**How to apply:** Refresh history for entry and expiry only, verify timestamp freshness, and treat equal or unavailable settlement prices as non-loss outcomes that do not open an overlay.
