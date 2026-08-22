@@ -1,0 +1,1 @@
+- [Gemini signal-analysis limits](gemini-rate-limits.md) — back off after temporary Gemini quota responses; do not burst retries during signal search.

@@ -41,6 +41,8 @@ MAX_PRICE_AGE_SEC = int(os.getenv("MAX_PRICE_AGE_SEC", "20"))
 CANDLE_TIMEOUT_SEC = int(os.getenv("CANDLE_FETCH_TIMEOUT_SEC", "8"))
 SIGNAL_DURATION_SEC = int(os.getenv("SIGNAL_DURATION_SEC", "120"))
 SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
+SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
+GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC", "15"))
 MAX_OVERLAYS = min(2, max(0, int(os.getenv("MAX_OVERLAYS", "2"))))
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_BRIDGE_URL = os.getenv("TELEGRAM_BRIDGE_URL", "http://127.0.0.1:8010").rstrip("/")
@@ -116,13 +118,15 @@ payout_cache: dict[str, float] = {}
 payout_cache_at = 0.0
 price_cache: dict[str, float] = {}
 price_times: dict[str, float] = {}
-candle_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="candles")
-analysis_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="analysis")
+candle_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="candles")
+analysis_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="analysis")
 signal_stop = threading.Event()
 signal_state_lock = threading.Lock()
 active_signal: Optional[dict[str, Any]] = None
 next_signal_at = 0.0
 search_started_at = 0.0
+scan_cursor = 0
+gemini_next_request_at = 0.0
 signal_thread: Optional[threading.Thread] = None
 
 
@@ -204,16 +208,21 @@ def market_snapshot(active: str) -> dict[str, Any]:
 
 
 def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
+    global gemini_next_request_at
+    now = time.monotonic()
+    if now < gemini_next_request_at:
+        raise RuntimeError("Gemini cooldown")
+    gemini_next_request_at = now + GEMINI_MIN_REQUEST_INTERVAL_SEC
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key:
         raise RuntimeError("GEMINI_API_KEY не настроен")
     prompt = (
-        "Ты анализируешь краткосрочный рынок бинарных опционов. "
-        "Это образовательный аналитический сигнал, не гарантия прибыли. "
-        'Верни только JSON вида {"direction":"ВГОРУ" или "ВНИЗ",'
+        "Ти аналізуєш короткостроковий ринок бінарних опціонів. "
+        "Це освітній аналітичний сигнал, а не гарантія прибутку. "
+        'Поверни лише JSON виду {"direction":"ВГОРУ" або "ВНИЗ",'
         '"confidence":0-100,"reason":"коротко українською мовою"}. '
-        f"Пара {snapshot['active']}, цена {snapshot['price']}, тренд {snapshot['trend']}, "
-        f"волатильность {snapshot['volatility']}, последние закрытия {snapshot['closes']}."
+        f"Пара {snapshot['active']}, ціна {snapshot['price']}, тренд {snapshot['trend']}, "
+        f"волатильність {snapshot['volatility']}, останні закриття {snapshot['closes']}."
     )
     response = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
@@ -222,7 +231,17 @@ def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
               "generationConfig": {"responseMimeType": "application/json"}},
         timeout=25,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        detail = response.text[:500].replace("\n", " ")
+        retry_match = re.search(r"retry in ([\d.]+)s", detail, flags=re.IGNORECASE)
+        if response.status_code == 429 and retry_match:
+            gemini_next_request_at = max(
+                gemini_next_request_at,
+                time.monotonic() + float(retry_match.group(1)) + 1,
+            )
+        raise RuntimeError(f"Gemini HTTP {response.status_code}: {detail}") from exc
     text = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
     result = json.loads(text)
@@ -346,12 +365,32 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
 
 
 def generate_best_signal() -> Optional[dict[str, Any]]:
+    global scan_cursor
+    if time.monotonic() < gemini_next_request_at:
+        return None
     payouts = refresh_payouts(force=True)
-    eligible = [pair for pair in OTC_PAIRS if payouts.get(pair, -1) >= MIN_PAYOUT]
+    eligible = sorted(
+        (pair for pair in OTC_PAIRS if payouts.get(pair, -1) >= MIN_PAYOUT),
+        key=lambda pair: payouts[pair],
+        reverse=True,
+    )
+    if not eligible:
+        return None
+    batch_size = min(SIGNAL_SCAN_PAIRS, len(eligible))
+    selected = [eligible[(scan_cursor + index) % len(eligible)] for index in range(batch_size)]
+    scan_cursor = (scan_cursor + batch_size) % len(eligible)
 
-    def analyze_pair(active: str) -> Optional[dict[str, Any]]:
+    snapshots: list[tuple[str, dict[str, Any]]] = []
+    for active in selected:
         try:
             snapshot = market_snapshot(active)
+            snapshots.append((active, snapshot))
+        except Exception as exc:
+            log.warning("Пропущено отримання даних %s: %s", active, type(exc).__name__)
+
+    def analyze_snapshot(item: tuple[str, dict[str, Any]]) -> Optional[dict[str, Any]]:
+        active, snapshot = item
+        try:
             analysis = gemini_analysis(snapshot)
             return {
                 **analysis, "pair": display_pair(active), "raw_pair": active,
@@ -361,10 +400,10 @@ def generate_best_signal() -> Optional[dict[str, Any]]:
                 "snapshot": snapshot,
             }
         except Exception as exc:
-            log.warning("Пропущен сигнал %s: %s", active, type(exc).__name__)
+            log.warning("Пропущено Gemini-аналіз %s: %s", active, str(exc)[:600])
             return None
 
-    candidates = [result for result in analysis_pool.map(analyze_pair, eligible) if result]
+    candidates = [result for result in analysis_pool.map(analyze_snapshot, snapshots) if result]
     best: Optional[dict[str, Any]] = max(candidates, key=lambda item: item["confidence"], default=None)
     if best:
         best["image_base64"] = chart_png(best["snapshot"], best["direction"])
@@ -451,7 +490,7 @@ def signal_loop() -> None:
                 search_started_at = 0.0
                 next_signal_at = now + 2
             else:
-                next_signal_at = now + 5
+                next_signal_at = max(now + 5, time.time() + (gemini_next_request_at - time.monotonic()))
             continue
         search_started_at = 0.0
         with signal_state_lock:
@@ -520,12 +559,15 @@ def pairs():
 def signal():
     best = generate_best_signal()
     if best is None:
-        return jsonify({"error": f"Нет пар с подтверждённой выплатой ≥ {MIN_PAYOUT:g}%", "min_payout": MIN_PAYOUT}), 503
+        return jsonify({
+            "error": f"Немає доступного сигналу з підтвердженою виплатою ≥ {MIN_PAYOUT:g}%",
+            "min_payout": MIN_PAYOUT,
+        }), 503
     response = {
         **best,
         "status": "ready",
         "min_payout": MIN_PAYOUT,
-        "message": "Сигнал выбран только среди пар с подтверждённой выплатой.",
+        "message": "Сигнал обрано лише серед пар із підтвердженою виплатою.",
     }
     response.pop("image_base64", None)
     return jsonify(response)
