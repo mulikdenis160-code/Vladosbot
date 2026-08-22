@@ -442,7 +442,7 @@ def format_result(signal: dict[str, Any]) -> str:
 def signal_loop() -> None:
     global active_signal, next_signal_at, search_started_at
     while not signal_stop.wait(1):
-        if not connected or not in_signal_window():
+        if not connected:
             continue
         now = time.time()
         with signal_state_lock:
@@ -453,7 +453,7 @@ def signal_loop() -> None:
                 send_result_to_telegram(current)
             except Exception as exc:
                 log.warning("Не вдалося надіслати підсумок у Telegram: %s", type(exc).__name__)
-            if not won and current["attempt"] < MAX_OVERLAYS:
+            if not won and current["attempt"] < MAX_OVERLAYS and in_signal_window():
                 replacement = dict(current)
                 replacement["attempt"] += 1
                 replacement["entry_price"] = current.get("close_price", current["entry_price"])
@@ -475,6 +475,8 @@ def signal_loop() -> None:
                 with signal_state_lock:
                     active_signal = None
                 next_signal_at = now + 2
+            continue
+        if not in_signal_window():
             continue
         if current or now < next_signal_at:
             continue
