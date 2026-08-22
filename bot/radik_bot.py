@@ -128,6 +128,7 @@ price_times: dict[str, float] = {}
 candle_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="candles")
 market_request_lock = threading.Lock()
 analysis_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="analysis")
+signal_search_lock = threading.Lock()
 signal_stop = threading.Event()
 signal_state_lock = threading.Lock()
 active_signal: Optional[dict[str, Any]] = None
@@ -477,6 +478,15 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
 
 
 def generate_best_signal() -> Optional[dict[str, Any]]:
+    if signal_is_in_progress() or not signal_search_lock.acquire(blocking=False):
+        return None
+    try:
+        return _generate_best_signal()
+    finally:
+        signal_search_lock.release()
+
+
+def _generate_best_signal() -> Optional[dict[str, Any]]:
     global scan_cursor
     if time.monotonic() < gemini_next_request_at:
         return None
@@ -750,6 +760,11 @@ def pairs():
 
 @app.get("/signal")
 def signal():
+    if signal_is_in_progress():
+        return jsonify({
+            "error": "Сигнал уже активний або очікує входу",
+            "status": "in_progress",
+        }), 409
     best = generate_best_signal()
     if best is None:
         return jsonify({
