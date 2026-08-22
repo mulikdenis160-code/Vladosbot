@@ -15,6 +15,7 @@ import statistics
 import sys
 import base64
 import io
+import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -44,6 +45,7 @@ SIGNAL_DURATION_SEC = int(os.getenv("SIGNAL_DURATION_SEC", "120"))
 SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
 GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC", "15"))
+SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
 MAX_OVERLAYS = min(2, max(0, int(os.getenv("MAX_OVERLAYS", "2"))))
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_BRIDGE_URL = os.getenv("TELEGRAM_BRIDGE_URL", "http://127.0.0.1:8010").rstrip("/")
@@ -126,6 +128,7 @@ analysis_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="analysis")
 signal_stop = threading.Event()
 signal_state_lock = threading.Lock()
 active_signal: Optional[dict[str, Any]] = None
+pending_signal: Optional[dict[str, Any]] = None
 next_signal_at = 0.0
 search_started_at = 0.0
 scan_cursor = 0
@@ -281,6 +284,28 @@ def in_signal_window() -> bool:
     return now >= SIGNAL_START or now < SIGNAL_END
 
 
+def next_candle_start(timestamp: float) -> float:
+    """Return a future one-minute boundary with enough notice to enter."""
+    entry_at = (math.floor(timestamp / 60) + 1) * 60
+    if entry_at - timestamp < SIGNAL_ENTRY_NOTICE_SEC:
+        entry_at += 60
+    return float(entry_at)
+
+
+def schedule_signal_entry(signal: dict[str, Any]) -> dict[str, Any]:
+    pending = dict(signal)
+    pending["entry_at"] = next_candle_start(time.time())
+    pending["entry_price_preview"] = pending.get("entry_price")
+    pending["entry_price"] = None
+    pending["created_at"] = None
+    pending["expires_at"] = None
+    return pending
+
+
+def entry_time_label(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, ZoneInfo(SIGNAL_TIMEZONE)).strftime("%H:%M")
+
+
 def telegram_request(path: str, payload: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
     response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
     response.raise_for_status()
@@ -330,10 +355,21 @@ def send_signal_to_telegram(
     if not TELEGRAM_CHAT_ID:
         log.warning("TELEGRAM_CHAT_ID не настроен, сигнал останется только в API")
         return
+    entry_at = signal.get("entry_at")
+    if entry_at:
+        entry_line = (
+            f"🕐 Вхід: з нової 1-хв свічки о {entry_time_label(entry_at)}:00 "
+            f"({SIGNAL_TIMEZONE})"
+        )
+        price_line = f"💰 Орієнтовна ціна: {signal.get('entry_price_preview', 'очікується')}"
+    else:
+        entry_line = ""
+        price_line = f"💰 Ціна входу: {signal['entry_price']}"
     text = (
         f"{caption_prefix}📊 СИГНАЛ • {signal['pair']} OTC\n\n"
         f"📈 Напрямок: {signal['direction']}\n"
-        f"💰 Ціна входу: {signal['entry_price']}\n"
+        f"{price_line}\n"
+        f"{entry_line}\n"
         f"⏱ Експірація: {SIGNAL_DURATION_SEC // 60} хв\n"
         f"💎 Виплата: {signal['payout']:.0f}%\n"
         f"🎯 Впевненість: {signal['confidence']}%\n\n"
@@ -461,7 +497,7 @@ def format_result(signal: dict[str, Any]) -> str:
 
 
 def signal_loop() -> None:
-    global active_signal, next_signal_at, search_started_at
+    global active_signal, pending_signal, next_signal_at, search_started_at
     while not signal_stop.wait(1):
         if not connected:
             continue
@@ -478,12 +514,12 @@ def signal_loop() -> None:
                 replacement = dict(current)
                 replacement["attempt"] += 1
                 replacement["entry_price"] = current.get("close_price", current["entry_price"])
-                replacement["created_at"] = now
-                replacement["expires_at"] = now + SIGNAL_DURATION_SEC
                 replacement["result"] = None
                 replacement["image_base64"] = ""
+                replacement = schedule_signal_entry(replacement)
                 with signal_state_lock:
-                    active_signal = replacement
+                    active_signal = None
+                    pending_signal = replacement
                 try:
                     send_signal_to_telegram(
                         replacement,
@@ -496,6 +532,43 @@ def signal_loop() -> None:
                 with signal_state_lock:
                     active_signal = None
                 next_signal_at = now + 2
+            continue
+        with signal_state_lock:
+            pending = pending_signal
+        if pending:
+            if now < pending["entry_at"]:
+                continue
+            if not in_signal_window():
+                with signal_state_lock:
+                    pending_signal = None
+                log.info("Скасовано відкладений сигнал: початок свічки поза робочим вікном")
+                next_signal_at = now + 2
+                continue
+            if now >= pending["entry_at"] + SIGNAL_DURATION_SEC:
+                with signal_state_lock:
+                    pending_signal = None
+                log.warning("Скасовано відкладений сигнал: пропущено час входу")
+                next_signal_at = now + 2
+                continue
+            try:
+                pending["entry_price"] = close_price(pending["raw_pair"])
+            except Exception as exc:
+                with signal_state_lock:
+                    pending_signal = None
+                log.warning("Не вдалося отримати ціну на початку свічки: %s", type(exc).__name__)
+                next_signal_at = now + 5
+                continue
+            pending["created_at"] = pending["entry_at"]
+            pending["expires_at"] = pending["entry_at"] + SIGNAL_DURATION_SEC
+            pending.pop("entry_price_preview", None)
+            with signal_state_lock:
+                active_signal = pending
+                pending_signal = None
+            log.info(
+                "Вхід активовано з нової 1-хв свічки: %s о %s, ціна=%s, експірація=%ss",
+                pending["pair"], entry_time_label(pending["entry_at"]),
+                pending["entry_price"], SIGNAL_DURATION_SEC,
+            )
             continue
         if not in_signal_window():
             continue
@@ -516,8 +589,9 @@ def signal_loop() -> None:
                 next_signal_at = max(now + 5, time.time() + (gemini_next_request_at - time.monotonic()))
             continue
         search_started_at = 0.0
+        candidate = schedule_signal_entry(candidate)
         with signal_state_lock:
-            active_signal = candidate
+            pending_signal = candidate
         try:
             send_signal_to_telegram(candidate)
         except Exception as exc:
