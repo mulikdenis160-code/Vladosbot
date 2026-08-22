@@ -274,7 +274,9 @@ def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 def in_signal_window() -> bool:
     now = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).time()
-    return SIGNAL_START <= now < SIGNAL_END
+    if SIGNAL_START <= SIGNAL_END:
+        return SIGNAL_START <= now < SIGNAL_END
+    return now >= SIGNAL_START or now < SIGNAL_END
 
 
 def telegram_request(path: str, payload: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
