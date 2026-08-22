@@ -2,7 +2,8 @@ modules = ["nodejs-24", "python-base-3.13"]
 
 [deployment]
 router = "application"
-deploymentTarget = "autoscale"
+deploymentTarget = "vm"
+run = "TELEGRAM_BRIDGE_PORT=8010 node bot/telegram_bridge.mjs & API_PORT=8008 uv run python bot/radik_bot.py"
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
