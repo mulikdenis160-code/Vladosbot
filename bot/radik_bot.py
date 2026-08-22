@@ -306,6 +306,11 @@ def entry_time_label(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, ZoneInfo(SIGNAL_TIMEZONE)).strftime("%H:%M")
 
 
+def signal_is_in_progress() -> bool:
+    with signal_state_lock:
+        return active_signal is not None or pending_signal is not None
+
+
 def telegram_request(path: str, payload: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
     response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
     response.raise_for_status()
@@ -573,6 +578,9 @@ def signal_loop() -> None:
         if not in_signal_window():
             continue
         if current or now < next_signal_at:
+            continue
+        if signal_is_in_progress():
+            search_started_at = 0.0
             continue
         if not search_started_at:
             search_started_at = now
