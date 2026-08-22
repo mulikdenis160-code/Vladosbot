@@ -51,6 +51,7 @@ packages = ["freetype", "glibcLocales", "lcms2", "libimagequant", "libjpeg", "li
 MAX_OVERLAYS = "2"
 SIGNAL_DURATION_SEC = "120"
 SIGNAL_ENTRY_NOTICE_SEC = "15"
+SIGNAL_RETRY_DELAY_SEC = "300"
 CANDLE_FETCH_TIMEOUT_SEC = "12"
 PRICE_RETRY_TIMEOUT_SEC = "15"
 SIGNAL_END_HOUR = "23:00"

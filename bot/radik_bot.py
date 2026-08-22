@@ -43,6 +43,7 @@ MAX_PRICE_AGE_SEC = int(os.getenv("MAX_PRICE_AGE_SEC", "20"))
 CANDLE_TIMEOUT_SEC = int(os.getenv("CANDLE_FETCH_TIMEOUT_SEC", "12"))
 SIGNAL_DURATION_SEC = int(os.getenv("SIGNAL_DURATION_SEC", "120"))
 SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
+SIGNAL_RETRY_DELAY_SEC = max(30, int(os.getenv("SIGNAL_RETRY_DELAY_SEC", "300")))
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
 GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC", "15"))
 SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
@@ -125,6 +126,7 @@ payout_cache_at = 0.0
 price_cache: dict[str, float] = {}
 price_times: dict[str, float] = {}
 candle_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="candles")
+market_request_lock = threading.Lock()
 analysis_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="analysis")
 signal_stop = threading.Event()
 signal_state_lock = threading.Lock()
@@ -185,18 +187,24 @@ def refresh_payouts(force: bool = False) -> dict[str, float]:
 def market_snapshot(active: str) -> dict[str, Any]:
     if not connected or api is None:
         raise RuntimeError(last_error or "Не подключено")
-    future = candle_pool.submit(api.get_candles, active, 60, count=60, count_request=1)
-    try:
-        if not future.result(timeout=CANDLE_TIMEOUT_SEC):
-            raise RuntimeError("Свечи не получены")
-    except FutureTimeoutError as exc:
-        raise RuntimeError("Таймаут получения свечей") from exc
+    with market_request_lock:
+        api.api.history_new = None
+        future = candle_pool.submit(api.ChangeSymbol, active, 60)
+        try:
+            if not future.result(timeout=CANDLE_TIMEOUT_SEC):
+                raise RuntimeError("Свечі не отримані")
+        except FutureTimeoutError as exc:
+            raise RuntimeError("Таймаут підписки на ринкові дані") from exc
     market = global_value.pairs.get(active) or {}
-    frame = market.get("dataframe")
-    history = market.get("history") or []
-    if frame is None or len(frame) < 15:
+    candles = market.get("history") or []
+    ticks = market.get("ticks") or []
+    if len(candles) < 15:
         raise RuntimeError("Недостаточно свечей")
-    live = next((item for item in reversed(history) if isinstance(item, dict) and item.get("price") is not None), None)
+    live = next(
+        (item for item in reversed(ticks)
+         if isinstance(item, dict) and item.get("price") is not None),
+        None,
+    )
     if not live:
         raise RuntimeError("Нет live-котировки")
     price = float(live["price"])
@@ -205,7 +213,13 @@ def market_snapshot(active: str) -> dict[str, Any]:
     age = max(0.0, server_now - tick_time) if tick_time else MAX_PRICE_AGE_SEC + 1
     if age > MAX_PRICE_AGE_SEC:
         raise RuntimeError("Котировка устарела")
-    closes = [float(value) for value in frame["close"].tail(30).tolist()]
+    closes = [
+        float(candle["close"])
+        for candle in sorted(candles, key=lambda candle: candle.get("time", 0))
+        if candle.get("close") is not None
+    ][-30:]
+    if len(closes) < 15:
+        raise RuntimeError("Недостаточно закрытий свечей")
     price_cache[active], price_times[active] = price, time.time()
     return {
         "active": active, "price": price, "tick_time": tick_time,
@@ -424,6 +438,18 @@ def send_search_to_telegram() -> None:
     })
 
 
+def send_search_finished_to_telegram() -> None:
+    if not TELEGRAM_CHAT_ID:
+        return
+    telegram_request("/send-message", {
+        "text": (
+            "⏸ ПОШУК ЗАВЕРШЕНО\n\n"
+            f"За {SIGNAL_SEARCH_TIMEOUT_SEC // 60} хв якісний сигнал не підтверджено. "
+            f"Наступна перевірка через {SIGNAL_RETRY_DELAY_SEC // 60} хв."
+        ),
+    })
+
+
 def send_result_to_telegram(signal: dict[str, Any]) -> None:
     label = (
         "✅ ВИГРАШ" if signal["result"] == "WIN"
@@ -472,7 +498,10 @@ def generate_best_signal() -> Optional[dict[str, Any]]:
             snapshot = market_snapshot(active)
             snapshots.append((active, snapshot))
         except Exception as exc:
-            log.warning("Пропущено отримання даних %s: %s", active, type(exc).__name__)
+            log.warning(
+                "Пропущено отримання даних %s: %s: %s",
+                active, type(exc).__name__, str(exc)[:180],
+            )
 
     def analyze_snapshot(item: tuple[str, dict[str, Any]]) -> Optional[dict[str, Any]]:
         active, snapshot = item
@@ -638,8 +667,19 @@ def signal_loop() -> None:
         candidate = generate_best_signal()
         if candidate is None:
             if now - search_started_at >= SIGNAL_SEARCH_TIMEOUT_SEC:
+                try:
+                    send_search_finished_to_telegram()
+                except Exception as exc:
+                    log.warning(
+                        "Не вдалося надіслати завершення пошуку у Telegram: %s",
+                        type(exc).__name__,
+                    )
+                log.warning(
+                    "Пошук сигналу завершено без результату; наступна спроба через %ss",
+                    SIGNAL_RETRY_DELAY_SEC,
+                )
                 search_started_at = 0.0
-                next_signal_at = now + 2
+                next_signal_at = now + SIGNAL_RETRY_DELAY_SEC
             else:
                 next_signal_at = max(now + 5, time.time() + (gemini_next_request_at - time.monotonic()))
             continue
