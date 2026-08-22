@@ -56,6 +56,8 @@ TELEGRAM_IMAGES = {
     "overlay": ASSET_DIR / "overlay.jpg",
     "summary": ASSET_DIR / "summary.jpg",
     "search": ASSET_DIR / "search.jpg",
+    "win": ASSET_DIR / "win.jpg",
+    "loss": ASSET_DIR / "loss.jpg",
 }
 
 OTC_PAIRS = [
@@ -335,8 +337,7 @@ def send_signal_to_telegram(
         f"⏱ Експірація: {SIGNAL_DURATION_SEC // 60} хв\n"
         f"💎 Виплата: {signal['payout']:.0f}%\n"
         f"🎯 Впевненість: {signal['confidence']}%\n\n"
-        f"📝 {signal['reason']}\n\n"
-        "ℹ️ Це аналітичний сигнал. Угоди автоматично не відкриваються."
+        f"📝 {signal['reason']}"
     )
     image = asset_base64(image_kind) or signal.get("image_base64", "")
     if image:
@@ -365,18 +366,22 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
         else "❌ ПРОГРАШ" if signal["result"] == "LOSS"
         else "⚠️ НЕ ВИЗНАЧЕНО"
     )
+    image_kind = (
+        "win" if signal["result"] == "WIN"
+        else "loss" if signal["result"] == "LOSS"
+        else "summary"
+    )
     text = (
-        f"📋 ПІДСУМОК • {signal['pair']} OTC\n\n"
+        f"📌 РЕЗУЛЬТАТ • {signal['pair']} OTC\n\n"
         f"{label}\n"
         f"Ціна входу: {signal['entry_price']}\n"
         f"Ціна закриття: {signal.get('close_price', 'немає даних')}\n"
-        f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}\n\n"
-        "Угоди автоматично не відкриваються."
+        f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
     )
     telegram_request("/send-photo", {
-        "image_base64": asset_base64("summary"),
+        "image_base64": asset_base64(image_kind),
         "caption": text,
-        "filename": "summary.jpg",
+        "filename": f"{image_kind}.jpg",
     })
 
 
