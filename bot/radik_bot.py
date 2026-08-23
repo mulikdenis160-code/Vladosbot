@@ -50,10 +50,17 @@ SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15"))
 PRICE_RETRY_TIMEOUT_SEC = max(1, int(os.getenv("PRICE_RETRY_TIMEOUT_SEC", "15")))
 MAX_OVERLAYS = min(2, max(0, int(os.getenv("MAX_OVERLAYS", "2"))))
 MARKET_PAUSE_SEC = max(30 * 60, int(os.getenv("MARKET_PAUSE_SEC", str(30 * 60))))
+STARTUP_SAFETY_PAUSE_SEC = max(
+    0, int(os.getenv("STARTUP_SAFETY_PAUSE_SEC", str(MARKET_PAUSE_SEC)))
+)
 MARKET_MONITOR_INTERVAL_SEC = max(
     30, int(os.getenv("MARKET_MONITOR_INTERVAL_SEC", "60"))
 )
 MARKET_MONITOR_PAIRS = max(1, int(os.getenv("MARKET_MONITOR_PAIRS", "3")))
+MARKET_RECOVERY_REQUIRED_PAIRS = min(
+    MARKET_MONITOR_PAIRS,
+    max(1, int(os.getenv("MARKET_RECOVERY_REQUIRED_PAIRS", "2"))),
+)
 MARKET_RECOVERY_VOLATILITY_MULTIPLIER = float(
     os.getenv("MARKET_RECOVERY_VOLATILITY_MULTIPLIER", "1.25")
 )
@@ -635,6 +642,18 @@ def send_market_resume_to_telegram() -> None:
     })
 
 
+def send_startup_safety_pause_to_telegram(minutes: int) -> None:
+    if not TELEGRAM_CHAT_ID:
+        return
+    telegram_request("/send-message", {
+        "text": (
+            "⏸ ПЕРЕВІРКА ПІСЛЯ ПЕРЕЗАПУСКУ\n\n"
+            f"Нові сигнали призупинено на {minutes} хвилин. "
+            "Бот перевірить свіжі дані кількох пар і відновить пошук лише після підтвердження ринку."
+        ),
+    })
+
+
 def send_incomplete_series_to_telegram(signal: dict[str, Any]) -> None:
     if not TELEGRAM_CHAT_ID:
         return
@@ -695,6 +714,28 @@ def start_market_pause(now: float, signal: dict[str, Any]) -> None:
         log.warning("Не вдалося повідомити про паузу в Telegram: %s", type(exc).__name__)
 
 
+def start_startup_safety_pause(now: float) -> None:
+    global market_pause_until, market_pause_started_at
+    global market_pause_last_check, market_pause_pair_index
+    global market_pause_pairs, market_pause_recovery_seen
+    if not STARTUP_SAFETY_PAUSE_SEC:
+        return
+    market_pause_started_at = now
+    market_pause_until = now + STARTUP_SAFETY_PAUSE_SEC
+    market_pause_last_check = 0.0
+    market_pause_pair_index = 0
+    market_pause_recovery_seen = False
+    market_pause_pairs = list(OTC_PAIRS[:MARKET_MONITOR_PAIRS])
+    log.warning(
+        "Захисна пауза після запуску: %s хв; моніторинг пар=%s",
+        STARTUP_SAFETY_PAUSE_SEC // 60, ", ".join(market_pause_pairs),
+    )
+    try:
+        send_startup_safety_pause_to_telegram(STARTUP_SAFETY_PAUSE_SEC // 60)
+    except Exception as exc:
+        log.warning("Не вдалося повідомити про захисну паузу після запуску: %s", type(exc).__name__)
+
+
 def monitor_market_pause(now: float) -> bool:
     global market_pause_until, market_pause_started_at
     global market_pause_last_check, market_pause_pair_index
@@ -711,32 +752,39 @@ def monitor_market_pause(now: float) -> bool:
         return market_pause_until > now
     if not market_pause_pairs:
         market_pause_pairs.extend(OTC_PAIRS[:MARKET_MONITOR_PAIRS])
-    pair = market_pause_pairs[market_pause_pair_index % len(market_pause_pairs)]
-    market_pause_pair_index += 1
-    market_pause_last_check = now
-    try:
-        snapshot = market_snapshot(pair)
-    except Exception as exc:
-        log.warning(
-            "Моніторинг паузи: не вдалося отримати свіжі дані %s: %s",
-            display_pair(pair), type(exc).__name__,
-        )
-        recovered = False
-    else:
+    def check_pair(pair: str) -> bool:
+        try:
+            snapshot = market_snapshot(pair)
+        except Exception as exc:
+            log.warning(
+                "Моніторинг паузи: не вдалося отримати свіжі дані %s: %s",
+                display_pair(pair), type(exc).__name__,
+            )
+            return False
         recovered = market_has_recovered(snapshot)
         log.info(
             "Моніторинг паузи %s: trend=%s volatility=%s recovered=%s",
             display_pair(pair), snapshot.get("trend"),
             snapshot.get("volatility"), recovered,
         )
-    market_pause_recovery_seen = recovered
+        return recovered
+
+    market_pause_last_check = now
     if now < minimum_end:
+        pair = market_pause_pairs[market_pause_pair_index % len(market_pause_pairs)]
+        market_pause_pair_index += 1
+        market_pause_recovery_seen = check_pair(pair)
         return True
-    if recovered:
+    recovered_pairs = sum(check_pair(pair) for pair in market_pause_pairs)
+    market_pause_recovery_seen = recovered_pairs >= MARKET_RECOVERY_REQUIRED_PAIRS
+    if market_pause_recovery_seen:
         market_pause_until = 0.0
         market_pause_started_at = 0.0
         market_pause_recovery_seen = False
-        log.info("Пауза завершена: ринок показав достатній рух")
+        log.info(
+            "Пауза завершена: рух підтвердили %s із %s контрольних пар",
+            recovered_pairs, len(market_pause_pairs),
+        )
         try:
             send_market_resume_to_telegram()
         except Exception as exc:
@@ -746,8 +794,10 @@ def monitor_market_pause(now: float) -> bool:
     market_pause_until = now + MARKET_PAUSE_SEC
     market_pause_recovery_seen = False
     log.warning(
-        "Ринок не покращився за %s хв; пауза продовжена ще на %s хв",
-        MARKET_PAUSE_SEC // 60, MARKET_PAUSE_SEC // 60,
+        "Ринок не покращився: рух підтвердили лише %s із %s пар "
+        "(потрібно щонайменше %s); пауза продовжена ще на %s хв",
+        recovered_pairs, len(market_pause_pairs), MARKET_RECOVERY_REQUIRED_PAIRS,
+        MARKET_PAUSE_SEC // 60,
     )
     try:
         send_market_pause_to_telegram(MARKET_PAUSE_SEC // 60, extension=True)
@@ -1180,6 +1230,8 @@ def main() -> None:
     log.info("RADIK AI BOT: пар ≥ %.2f%%, всего OTC-пар %s", MIN_PAYOUT, len(OTC_PAIRS))
     restore_signal_state()
     connect()
+    if active_signal is None and pending_signal is None:
+        start_startup_safety_pause(time.time())
     global signal_thread
     signal_thread = threading.Thread(target=signal_loop, name="signal-scheduler", daemon=True)
     signal_thread.start()

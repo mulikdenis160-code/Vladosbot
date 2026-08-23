@@ -41,6 +41,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             "start_pause": bot.start_market_pause,
             "send_pause": bot.send_market_pause_to_telegram,
             "send_resume": bot.send_market_resume_to_telegram,
+            "send_startup_pause": bot.send_startup_safety_pause_to_telegram,
             "send_incomplete": bot.send_incomplete_series_to_telegram,
             "market_snapshot": bot.market_snapshot,
             "persist_signal_state": bot.persist_signal_state,
@@ -76,6 +77,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.start_market_pause = self.saved["start_pause"]
         bot.send_market_pause_to_telegram = self.saved["send_pause"]
         bot.send_market_resume_to_telegram = self.saved["send_resume"]
+        bot.send_startup_safety_pause_to_telegram = self.saved["send_startup_pause"]
         bot.send_incomplete_series_to_telegram = self.saved["send_incomplete"]
         bot.market_snapshot = self.saved["market_snapshot"]
         bot.persist_signal_state = self.saved["persist_signal_state"]
@@ -136,6 +138,16 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertGreater(bot.market_pause_until, original_end + 1)
         self.assertEqual(messages, [(bot.MARKET_PAUSE_SEC // 60, False), (bot.MARKET_PAUSE_SEC // 60, True)])
 
+    def test_startup_safety_pause_blocks_search_after_a_restart(self):
+        messages = []
+        bot.send_startup_safety_pause_to_telegram = lambda minutes: messages.append(minutes)
+
+        bot.start_startup_safety_pause(100)
+
+        self.assertEqual(bot.market_pause_until, 100 + bot.STARTUP_SAFETY_PAUSE_SEC)
+        self.assertEqual(messages, [bot.STARTUP_SAFETY_PAUSE_SEC // 60])
+        self.assertEqual(len(bot.market_pause_pairs), bot.MARKET_MONITOR_PAIRS)
+
     def test_pause_resumes_only_after_minimum_duration_and_recovery(self):
         resumed = []
         bot.send_market_pause_to_telegram = lambda *args, **kwargs: None
@@ -165,6 +177,21 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertTrue(bot.monitor_market_pause(pause_end))
         self.assertGreater(bot.market_pause_until, pause_end)
 
+    def test_pause_needs_recovery_from_multiple_pairs_at_expiry(self):
+        bot.send_market_pause_to_telegram = lambda *args, **kwargs: None
+        recovered = {
+            "closes": [1.0] * 25 + [1.0, 1.01, 1.02, 1.03, 1.04],
+            "trend": "up",
+            "volatility": 0.01,
+        }
+        flat = {"closes": [1.2] * 30, "trend": "up", "volatility": 0.0}
+        bot.market_snapshot = lambda pair: recovered if pair == "EURUSD_otc" else flat
+        bot.start_market_pause(100, signal(2))
+        pause_end = 100 + bot.MARKET_PAUSE_SEC
+
+        self.assertTrue(bot.monitor_market_pause(pause_end + 1))
+        self.assertGreater(bot.market_pause_until, pause_end + 1)
+
     def test_early_recovery_does_not_resume_if_expiry_check_is_flat(self):
         bot.send_market_pause_to_telegram = lambda *args, **kwargs: None
         recovered = {
@@ -173,8 +200,13 @@ class OverlayAndPauseTests(unittest.TestCase):
             "volatility": 0.01,
         }
         flat = {"closes": [1.2] * 30, "trend": "up", "volatility": 0.0}
-        snapshots = [recovered, flat]
-        bot.market_snapshot = lambda pair: snapshots.pop(0)
+        calls = []
+
+        def snapshot(_pair):
+            calls.append(True)
+            return recovered if len(calls) == 1 else flat
+
+        bot.market_snapshot = snapshot
         bot.start_market_pause(100, signal(2))
         pause_end = 100 + bot.MARKET_PAUSE_SEC
         self.assertTrue(bot.monitor_market_pause(pause_end - 1))

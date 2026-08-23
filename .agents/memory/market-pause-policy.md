@@ -47,3 +47,13 @@ expected result message in the chat.
 
 **How to apply:** Gate the next search on a successful text-result delivery
 and log its Telegram message identifier.
+
+At pause expiry, test every configured control pair afresh and resume only
+when the configured recovery quorum passes (default: 2 of 3); a single
+favorable sample never releases the pause.
+
+**Why:** One pair can look healthy while the broader OTC market remains
+unstable, which made a one-sample pause decision inconsistent.
+
+**How to apply:** Production restarts begin with a neutral safety pause, and
+only the production VM may send Telegram signals; never run a local bot beside it.

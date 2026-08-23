@@ -10,28 +10,6 @@ args = ["pnpm", "store", "prune"]
 env = { "CI" = "true" }
 
 [workflows]
-runButton = "Project"
-
-[[workflows.workflow]]
-name = "Project"
-mode = "parallel"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "RADIK AI BOT"
-
-[[workflows.workflow]]
-name = "RADIK AI BOT"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "TELEGRAM_BRIDGE_PORT=8010 node bot/telegram_bridge.mjs & API_PORT=8008 uv run python bot/radik_bot.py"
-waitForPort = 8008
 
 [agent]
 stack = "PNPM_WORKSPACE"
