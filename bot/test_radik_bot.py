@@ -192,6 +192,21 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(len(incomplete), 1)
         self.assertIsNone(bot.active_signal)
 
+    def test_unentered_signal_gets_terminal_unknown_before_new_search(self):
+        finals, recorded = [], []
+        bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
+        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+        current = signal(0)
+        bot.pending_signal = current
+
+        bot.finalize_pending_signal(current, 100, "ціна входу недоступна")
+
+        self.assertEqual(len(finals), 1)
+        self.assertEqual(finals[0]["result"], "UNKNOWN")
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0]["result"], "UNKNOWN")
+        self.assertIsNone(bot.pending_signal)
+
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))

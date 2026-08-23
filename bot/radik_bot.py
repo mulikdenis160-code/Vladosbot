@@ -511,7 +511,7 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
     text = (
         f"📌 РЕЗУЛЬТАТ • {signal['pair']} OTC\n\n"
         f"{label}\n"
-        f"Ціна входу: {signal['entry_price']}\n"
+        f"Ціна входу: {signal.get('entry_price') or 'не зафіксовано'}\n"
         f"Ціна закриття: {signal.get('close_price', 'немає даних')}\n"
         f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
     )
@@ -884,6 +884,30 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
     maybe_send_daily_summary(now)
 
 
+def finalize_pending_signal(
+    signal: dict[str, Any], now: float, reason: str
+) -> None:
+    global active_signal, pending_signal, next_signal_at
+    signal["result"] = "UNKNOWN"
+    signal["result_error"] = reason
+    log.warning(
+        "Сигнал %s не активовано: %s; новий пошук буде дозволено після результату",
+        signal["pair"], reason,
+    )
+    record_signal_result(signal)
+    try:
+        send_result_to_telegram(signal)
+    except Exception as exc:
+        log.warning("Не вдалося надіслати результат неактивованого сигналу: %s", type(exc).__name__)
+    with signal_state_lock:
+        if pending_signal is signal:
+            pending_signal = None
+        if active_signal is signal:
+            active_signal = None
+    next_signal_at = now + 2
+    maybe_send_daily_summary(now)
+
+
 def signal_loop() -> None:
     global active_signal, pending_signal, next_signal_at, search_started_at
     while not signal_stop.wait(1):
@@ -902,26 +926,19 @@ def signal_loop() -> None:
             if now < pending["entry_at"]:
                 continue
             if not in_signal_window():
-                with signal_state_lock:
-                    pending_signal = None
-                log.info("Скасовано відкладений сигнал: початок свічки поза робочим вікном")
-                next_signal_at = now + 2
+                finalize_pending_signal(pending, now, "початок свічки поза робочим вікном")
                 continue
             if now >= pending["entry_at"] + SIGNAL_DURATION_SEC:
-                with signal_state_lock:
-                    pending_signal = None
-                log.warning("Скасовано відкладений сигнал: пропущено час входу")
-                next_signal_at = now + 2
+                finalize_pending_signal(pending, now, "пропущено час входу")
                 continue
             try:
                 pending["entry_price"] = wait_for_market_price(
                     pending["raw_pair"], pending["entry_at"]
                 )
             except Exception as exc:
-                with signal_state_lock:
-                    pending_signal = None
                 log.warning(
-                    "Не вдалося отримати ціну на початку свічки: %s: %s",
+                    "Не вдалося отримати ціну на початку свічки: %s: %s; "
+                    "серія залишається заблокованою до завершення очікування",
                     type(exc).__name__, str(exc)[:160],
                 )
                 next_signal_at = now + 5
@@ -987,6 +1004,10 @@ def signal_loop() -> None:
                 next_signal_at = now + 2
                 continue
             pending_signal = candidate
+            log.info(
+                "Сигнал поставлено в очікування: %s; пошук заблоковано до фінального результату",
+                candidate["pair"],
+            )
         try:
             send_signal_to_telegram(candidate)
         except Exception as exc:

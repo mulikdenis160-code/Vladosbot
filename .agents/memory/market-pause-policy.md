@@ -17,3 +17,13 @@ series.
 messages, daily statistics, or restart behavior must preserve the distinction
 between an overlay attempt and a final series result. Never resume the pause
 from stale or earlier market observations.
+
+An announced or pending signal remains the sole series owner until a terminal
+result is sent. A missing entry quote must resolve as UNKNOWN, not clear the
+pending state and start another search.
+
+**Why:** Clearing a sent-but-unconfirmed signal creates an apparent second
+signal even though the first series has not been resolved.
+
+**How to apply:** Treat pending entry failures and missed entry windows as
+terminal non-loss outcomes before allowing the scheduler to search again.
