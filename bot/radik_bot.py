@@ -131,6 +131,7 @@ analysis_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="analysis")
 signal_search_lock = threading.Lock()
 signal_stop = threading.Event()
 signal_state_lock = threading.Lock()
+daily_stats_lock = threading.Lock()
 active_signal: Optional[dict[str, Any]] = None
 pending_signal: Optional[dict[str, Any]] = None
 next_signal_at = 0.0
@@ -138,6 +139,9 @@ search_started_at = 0.0
 scan_cursor = 0
 gemini_next_request_at = 0.0
 signal_thread: Optional[threading.Thread] = None
+daily_stats_date = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
+daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
+daily_summary_sent_date: Optional[str] = None
 
 
 def display_pair(active: str) -> str:
@@ -349,6 +353,25 @@ def signal_is_in_progress() -> bool:
         return active_signal is not None or pending_signal is not None
 
 
+def result_day(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
+
+
+def record_signal_result(signal: dict[str, Any]) -> None:
+    global daily_stats_date, daily_stats
+    timestamp = float(signal.get("entry_at") or signal.get("created_at") or time.time())
+    day = result_day(timestamp)
+    outcome = signal.get("result", "UNKNOWN")
+    if outcome not in {"WIN", "LOSS", "DRAW", "UNKNOWN"}:
+        outcome = "UNKNOWN"
+    with daily_stats_lock:
+        if day != daily_stats_date:
+            daily_stats_date = day
+            daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
+        daily_stats["total"] += 1
+        daily_stats[outcome] += 1
+
+
 def telegram_request(path: str, payload: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
     response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
     response.raise_for_status()
@@ -477,6 +500,55 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
     })
 
 
+def send_daily_summary_to_telegram(summary_date: str, stats: dict[str, int]) -> None:
+    if not TELEGRAM_CHAT_ID:
+        return
+    net = stats["WIN"] - stats["LOSS"]
+    net_label = f"+{net}" if net > 0 else str(net)
+    text = (
+        f"📊 ПІДСУМОК ДНЯ • {summary_date}\n\n"
+        f"Усього спроб: {stats['total']}\n"
+        f"✅ Виграшів: {stats['WIN']}\n"
+        f"❌ Програшів: {stats['LOSS']}\n"
+        f"➖ Нічиїх: {stats['DRAW']}\n"
+        f"⚠️ Не визначено: {stats['UNKNOWN']}\n\n"
+        f"Баланс результатів: {net_label}"
+    )
+    telegram_request("/send-photo", {
+        "image_base64": asset_base64("summary"),
+        "caption": text,
+        "filename": "daily-summary.jpg",
+    })
+
+
+def maybe_send_daily_summary(now: float) -> None:
+    global daily_summary_sent_date, daily_stats_date, daily_stats
+    local_now = datetime.fromtimestamp(now, ZoneInfo(SIGNAL_TIMEZONE))
+    if local_now.time() < SIGNAL_END:
+        return
+    with signal_state_lock:
+        if active_signal is not None or pending_signal is not None:
+            return
+    summary_date = local_now.date().isoformat()
+    with daily_stats_lock:
+        if daily_summary_sent_date == summary_date:
+            return
+        if daily_stats_date != summary_date:
+            daily_stats_date = summary_date
+            daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
+        stats = dict(daily_stats)
+        daily_summary_sent_date = summary_date
+    try:
+        send_daily_summary_to_telegram(summary_date, stats)
+        log.info(
+            "Денний підсумок надіслано: %s total=%s win=%s loss=%s draw=%s unknown=%s",
+            summary_date, stats["total"], stats["WIN"], stats["LOSS"],
+            stats["DRAW"], stats["UNKNOWN"],
+        )
+    except Exception as exc:
+        log.warning("Не вдалося надіслати денний підсумок: %s", type(exc).__name__)
+
+
 def generate_best_signal() -> Optional[dict[str, Any]]:
     if signal_is_in_progress() or not signal_search_lock.acquire(blocking=False):
         return None
@@ -588,6 +660,12 @@ def signal_loop() -> None:
             current = active_signal
         if current and now >= current["expires_at"]:
             outcome = evaluate_signal(current)
+            record_signal_result(current)
+            log.info(
+                "Результат сигналу: %s %s entry=%s close=%s attempt=%s",
+                current["pair"], outcome, current["entry_price"],
+                current.get("close_price", "немає даних"), current["attempt"] + 1,
+            )
             try:
                 send_result_to_telegram(current)
             except Exception as exc:
@@ -614,6 +692,7 @@ def signal_loop() -> None:
                 with signal_state_lock:
                     active_signal = None
                 next_signal_at = now + 2
+                maybe_send_daily_summary(now)
             continue
         with signal_state_lock:
             pending = pending_signal
@@ -661,6 +740,7 @@ def signal_loop() -> None:
             except Exception as exc:
                 log.warning("Не вдалося надіслати підтвердження входу: %s", type(exc).__name__)
             continue
+        maybe_send_daily_summary(now)
         if not in_signal_window():
             continue
         if current or now < next_signal_at:
