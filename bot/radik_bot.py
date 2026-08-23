@@ -49,6 +49,17 @@ GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC
 SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
 PRICE_RETRY_TIMEOUT_SEC = max(1, int(os.getenv("PRICE_RETRY_TIMEOUT_SEC", "15")))
 MAX_OVERLAYS = min(2, max(0, int(os.getenv("MAX_OVERLAYS", "2"))))
+MARKET_PAUSE_SEC = max(30 * 60, int(os.getenv("MARKET_PAUSE_SEC", str(30 * 60))))
+MARKET_MONITOR_INTERVAL_SEC = max(
+    30, int(os.getenv("MARKET_MONITOR_INTERVAL_SEC", "60"))
+)
+MARKET_MONITOR_PAIRS = max(1, int(os.getenv("MARKET_MONITOR_PAIRS", "3")))
+MARKET_RECOVERY_VOLATILITY_MULTIPLIER = float(
+    os.getenv("MARKET_RECOVERY_VOLATILITY_MULTIPLIER", "1.25")
+)
+MARKET_RECOVERY_MIN_MOVE_PCT = float(
+    os.getenv("MARKET_RECOVERY_MIN_MOVE_PCT", "0.015")
+)
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_BRIDGE_URL = os.getenv("TELEGRAM_BRIDGE_URL", "http://127.0.0.1:8010").rstrip("/")
 SIGNAL_TIMEZONE = os.getenv("SIGNAL_TIMEZONE", "Europe/Kyiv")
@@ -142,6 +153,12 @@ signal_thread: Optional[threading.Thread] = None
 daily_stats_date = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
 daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
 daily_summary_sent_date: Optional[str] = None
+market_pause_until = 0.0
+market_pause_started_at = 0.0
+market_pause_last_check = 0.0
+market_pause_pair_index = 0
+market_pause_pairs: list[str] = []
+market_pause_recovery_seen = False
 
 
 def display_pair(active: str) -> str:
@@ -549,6 +566,148 @@ def maybe_send_daily_summary(now: float) -> None:
         log.warning("Не вдалося надіслати денний підсумок: %s", type(exc).__name__)
 
 
+def send_market_pause_to_telegram(minutes: int, extension: bool = False) -> None:
+    if not TELEGRAM_CHAT_ID:
+        return
+    prefix = "⏸ ПАУЗА ПРОДОВЖЕНА" if extension else "⏸ СИГНАЛИ ПРИЗУПИНЕНО"
+    telegram_request("/send-message", {
+        "text": (
+            f"{prefix}\n\n"
+            f"Після серії з трьох невдалих угод нові сигнали зупинено на {minutes} хвилин.\n"
+            "Бот стежить за свіжими даними ринку й продовжить пошук, коли умови покращаться."
+        ),
+    })
+
+
+def send_market_resume_to_telegram() -> None:
+    if not TELEGRAM_CHAT_ID:
+        return
+    telegram_request("/send-message", {
+        "text": "▶️ ПОШУК ВІДНОВЛЕНО\n\nРинок показав достатній рух для відновлення пошуку сигналів.",
+    })
+
+
+def send_incomplete_series_to_telegram(signal: dict[str, Any]) -> None:
+    if not TELEGRAM_CHAT_ID:
+        return
+    telegram_request("/send-message", {
+        "text": (
+            f"⏹ СЕРІЮ ЗУПИНЕНО • {signal['pair']} OTC\n\n"
+            "Наступне перекриття не відкрито, бо завершився робочий час. "
+            "Ця незавершена серія не врахована як програш у статистиці."
+        ),
+    })
+
+
+def market_has_recovered(snapshot: dict[str, Any]) -> bool:
+    closes = [
+        float(value) for value in snapshot.get("closes", [])
+        if value is not None
+    ]
+    if len(closes) < 5:
+        return False
+    recent = closes[-5:]
+    deltas = [recent[index] - recent[index - 1] for index in range(1, len(recent))]
+    positive = sum(delta > 0 for delta in deltas)
+    negative = sum(delta < 0 for delta in deltas)
+    dominant = max(positive, negative)
+    if dominant < 3:
+        return False
+    movement = abs(recent[-1] - recent[0])
+    volatility = max(float(snapshot.get("volatility") or 0), abs(recent[-1]) * 1e-8)
+    minimum_move = abs(recent[-1]) * MARKET_RECOVERY_MIN_MOVE_PCT / 100
+    return movement >= max(volatility * MARKET_RECOVERY_VOLATILITY_MULTIPLIER, minimum_move)
+
+
+def start_market_pause(now: float, signal: dict[str, Any]) -> None:
+    global market_pause_until, market_pause_started_at
+    global market_pause_last_check, market_pause_pair_index
+    global market_pause_pairs, market_pause_recovery_seen
+    market_pause_started_at = now
+    market_pause_until = now + MARKET_PAUSE_SEC
+    market_pause_last_check = 0.0
+    market_pause_pair_index = 0
+    market_pause_recovery_seen = False
+    raw_pair = signal.get("raw_pair")
+    seen_pairs: set[str] = set()
+    market_pause_pairs = []
+    for pair in [raw_pair] + OTC_PAIRS:
+        if pair and pair not in seen_pairs:
+            seen_pairs.add(pair)
+            market_pause_pairs.append(pair)
+        if len(market_pause_pairs) >= MARKET_MONITOR_PAIRS:
+            break
+    log.warning(
+        "Пауза нових сигналів після третьої невдачі: %s хв; моніторинг пар=%s",
+        MARKET_PAUSE_SEC // 60, ", ".join(market_pause_pairs),
+    )
+    try:
+        send_market_pause_to_telegram(MARKET_PAUSE_SEC // 60)
+    except Exception as exc:
+        log.warning("Не вдалося повідомити про паузу в Telegram: %s", type(exc).__name__)
+
+
+def monitor_market_pause(now: float) -> bool:
+    global market_pause_until, market_pause_started_at
+    global market_pause_last_check, market_pause_pair_index
+    global market_pause_recovery_seen
+    if not market_pause_until:
+        return False
+    minimum_end = market_pause_started_at + MARKET_PAUSE_SEC
+    if (
+        now < minimum_end
+        and
+        market_pause_last_check
+        and now - market_pause_last_check < MARKET_MONITOR_INTERVAL_SEC
+    ):
+        return market_pause_until > now
+    if not market_pause_pairs:
+        market_pause_pairs.extend(OTC_PAIRS[:MARKET_MONITOR_PAIRS])
+    pair = market_pause_pairs[market_pause_pair_index % len(market_pause_pairs)]
+    market_pause_pair_index += 1
+    market_pause_last_check = now
+    try:
+        snapshot = market_snapshot(pair)
+    except Exception as exc:
+        log.warning(
+            "Моніторинг паузи: не вдалося отримати свіжі дані %s: %s",
+            display_pair(pair), type(exc).__name__,
+        )
+        recovered = False
+    else:
+        recovered = market_has_recovered(snapshot)
+        log.info(
+            "Моніторинг паузи %s: trend=%s volatility=%s recovered=%s",
+            display_pair(pair), snapshot.get("trend"),
+            snapshot.get("volatility"), recovered,
+        )
+    market_pause_recovery_seen = recovered
+    if now < minimum_end:
+        return True
+    if recovered:
+        market_pause_until = 0.0
+        market_pause_started_at = 0.0
+        market_pause_recovery_seen = False
+        log.info("Пауза завершена: ринок показав достатній рух")
+        try:
+            send_market_resume_to_telegram()
+        except Exception as exc:
+            log.warning("Не вдалося повідомити про відновлення пошуку: %s", type(exc).__name__)
+        return False
+    market_pause_started_at = now
+    market_pause_until = now + MARKET_PAUSE_SEC
+    market_pause_recovery_seen = False
+    log.warning(
+        "Ринок не покращився за %s хв; пауза продовжена ще на %s хв",
+        MARKET_PAUSE_SEC // 60, MARKET_PAUSE_SEC // 60,
+    )
+    try:
+        send_market_pause_to_telegram(MARKET_PAUSE_SEC // 60, extension=True)
+    except Exception as exc:
+        log.warning("Не вдалося повідомити про продовження паузи: %s", type(exc).__name__)
+    return True
+
+
 def generate_best_signal() -> Optional[dict[str, Any]]:
     if signal_is_in_progress() or not signal_search_lock.acquire(blocking=False):
         return None
@@ -650,6 +809,68 @@ def format_result(signal: dict[str, Any]) -> str:
     )
 
 
+def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> None:
+    global active_signal, pending_signal, next_signal_at
+    log.info(
+        "Результат спроби: %s %s entry=%s close=%s attempt=%s",
+        signal["pair"], outcome, signal["entry_price"],
+        signal.get("close_price", "немає даних"), signal["attempt"] + 1,
+    )
+    has_overlay_left = signal["attempt"] < MAX_OVERLAYS
+    if outcome == "LOSS" and has_overlay_left and in_signal_window():
+        replacement = dict(signal)
+        replacement["attempt"] += 1
+        replacement["entry_price"] = signal.get("close_price", signal["entry_price"])
+        replacement["result"] = None
+        replacement.pop("close_price", None)
+        replacement["image_base64"] = ""
+        replacement = schedule_signal_entry(replacement)
+        with signal_state_lock:
+            active_signal = None
+            pending_signal = replacement
+        log.info(
+            "Невдала спроба %s/%s переведена в перекриття %s/%s",
+            signal["attempt"] + 1, MAX_OVERLAYS + 1,
+            replacement["attempt"], MAX_OVERLAYS,
+        )
+        try:
+            send_signal_to_telegram(
+                replacement,
+                f"🔁 ПЕРЕКРИТТЯ {replacement['attempt']}/{MAX_OVERLAYS}\n",
+                "overlay",
+            )
+        except Exception as exc:
+            log.warning("Не вдалося надіслати перекриття у Telegram: %s", type(exc).__name__)
+        return
+
+    if outcome == "LOSS" and has_overlay_left:
+        log.warning(
+            "Серію %s не продовжено: наступне перекриття поза робочим вікном; "
+            "проміжний результат не враховано",
+            signal["pair"],
+        )
+        try:
+            send_incomplete_series_to_telegram(signal)
+        except Exception as exc:
+            log.warning("Не вдалося повідомити про незавершену серію: %s", type(exc).__name__)
+        with signal_state_lock:
+            active_signal = None
+        next_signal_at = now + 2
+        maybe_send_daily_summary(now)
+        return
+    record_signal_result(signal)
+    try:
+        send_result_to_telegram(signal)
+    except Exception as exc:
+        log.warning("Не вдалося надіслати підсумок у Telegram: %s", type(exc).__name__)
+    with signal_state_lock:
+        active_signal = None
+    if outcome == "LOSS" and not has_overlay_left:
+        start_market_pause(now, signal)
+    next_signal_at = now + 2
+    maybe_send_daily_summary(now)
+
+
 def signal_loop() -> None:
     global active_signal, pending_signal, next_signal_at, search_started_at
     while not signal_stop.wait(1):
@@ -660,39 +881,7 @@ def signal_loop() -> None:
             current = active_signal
         if current and now >= current["expires_at"]:
             outcome = evaluate_signal(current)
-            record_signal_result(current)
-            log.info(
-                "Результат сигналу: %s %s entry=%s close=%s attempt=%s",
-                current["pair"], outcome, current["entry_price"],
-                current.get("close_price", "немає даних"), current["attempt"] + 1,
-            )
-            try:
-                send_result_to_telegram(current)
-            except Exception as exc:
-                log.warning("Не вдалося надіслати підсумок у Telegram: %s", type(exc).__name__)
-            if outcome == "LOSS" and current["attempt"] < MAX_OVERLAYS and in_signal_window():
-                replacement = dict(current)
-                replacement["attempt"] += 1
-                replacement["entry_price"] = current.get("close_price", current["entry_price"])
-                replacement["result"] = None
-                replacement["image_base64"] = ""
-                replacement = schedule_signal_entry(replacement)
-                with signal_state_lock:
-                    active_signal = None
-                    pending_signal = replacement
-                try:
-                    send_signal_to_telegram(
-                        replacement,
-                        f"🔁 ПЕРЕКРИТТЯ {replacement['attempt']}/{MAX_OVERLAYS}\n",
-                        "overlay",
-                    )
-                except Exception as exc:
-                    log.warning("Не вдалося надіслати перекриття у Telegram: %s", type(exc).__name__)
-            else:
-                with signal_state_lock:
-                    active_signal = None
-                next_signal_at = now + 2
-                maybe_send_daily_summary(now)
+            handle_signal_outcome(current, outcome, now)
             continue
         with signal_state_lock:
             pending = pending_signal
@@ -743,6 +932,10 @@ def signal_loop() -> None:
         maybe_send_daily_summary(now)
         if not in_signal_window():
             continue
+        if market_pause_until:
+            if monitor_market_pause(now):
+                search_started_at = 0.0
+                continue
         if current or now < next_signal_at:
             continue
         if signal_is_in_progress():
@@ -818,12 +1011,15 @@ CORS(app)
 @app.get("/api/healthz")
 def health():
     latest = max(price_times.values(), default=0)
+    pause_remaining = max(0, round(market_pause_until - time.time()))
     return jsonify({
         "status": "ok" if connected else "error", "connected": connected,
         "demo": bool(SSID_META["isDemo"]), "pairs_count": len(OTC_PAIRS),
         "payouts_loaded": len(payout_cache), "min_payout": MIN_PAYOUT,
         "ai_available": bool(os.getenv("GEMINI_API_KEY", "").strip()),
         "latest_price_age_sec": round(time.time() - latest, 1) if latest else None,
+        "market_pause_active": pause_remaining > 0,
+        "market_pause_remaining_sec": pause_remaining,
         "error": last_error,
     })
 

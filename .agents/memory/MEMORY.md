@@ -1,3 +1,4 @@
 - [Gemini signal-analysis limits](gemini-rate-limits.md) — back off after temporary Gemini quota responses; do not burst retries during signal search.
 - [Replit Gemini proxy](replit-gemini-proxy.md) — uses the proxy `/models` route and explicit Gemini message roles.
 - [Pocket Option price freshness](pocket-option-live-prices.md) — refresh pair history for entry and expiry; stale cached ticks must never trigger overlays.
+- [Market pause policy](market-pause-policy.md) — only third failed attempt is final; resume paused signals only after a fresh recovery check.
