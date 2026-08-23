@@ -565,7 +565,25 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
         f"Ціна закриття: {signal.get('close_price', 'немає даних')}\n"
         f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
     )
-    delivery = telegram_request("/send-message", {"text": text})
+    image_kind = {"WIN": "win", "LOSS": "loss"}.get(signal.get("result"))
+    image = asset_base64(image_kind) if image_kind else ""
+    try:
+        if image:
+            delivery = telegram_request("/send-photo", {
+                "image_base64": image,
+                "caption": text,
+                "filename": f"{image_kind}.jpg",
+            })
+        else:
+            delivery = telegram_request("/send-message", {"text": text})
+    except Exception as exc:
+        if not image:
+            raise
+        log.warning(
+            "Не вдалося надіслати картинку результату %s (%s), пробую текст",
+            signal["pair"], type(exc).__name__,
+        )
+        delivery = telegram_request("/send-message", {"text": text})
     log.info(
         "Фінальний результат %s підтверджено Telegram message_id=%s",
         signal["pair"], delivery.get("message_id", "невідомо"),

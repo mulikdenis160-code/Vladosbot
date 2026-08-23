@@ -277,8 +277,27 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         bot.send_result_to_telegram(current)
 
-        self.assertEqual([request[0] for request in requests], ["/send-message"])
-        self.assertIn("✅ ВИГРАШ", requests[0][1]["text"])
+        self.assertEqual([request[0] for request in requests], ["/send-photo"])
+        self.assertIn("✅ ВИГРАШ", requests[0][1]["caption"])
+        self.assertTrue(requests[0][1]["image_base64"])
+
+    def test_result_falls_back_to_text_when_result_image_fails(self):
+        requests = []
+
+        def request(path, payload):
+            requests.append((path, payload))
+            if path == "/send-photo":
+                raise ConnectionError("photo unavailable")
+            return {"ok": True, "message_id": 124}
+
+        bot.telegram_request = request
+        current = signal(0)
+        current["result"] = "WIN"
+
+        bot.send_result_to_telegram(current)
+
+        self.assertEqual([request[0] for request in requests], ["/send-photo", "/send-message"])
+        self.assertIn("✅ ВИГРАШ", requests[1][1]["text"])
 
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []
