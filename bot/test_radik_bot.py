@@ -43,6 +43,8 @@ class OverlayAndPauseTests(unittest.TestCase):
             "send_resume": bot.send_market_resume_to_telegram,
             "send_incomplete": bot.send_incomplete_series_to_telegram,
             "market_snapshot": bot.market_snapshot,
+            "persist_signal_state": bot.persist_signal_state,
+            "telegram_request": bot.telegram_request,
         }
         bot.active_signal = None
         bot.pending_signal = None
@@ -53,6 +55,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.market_pause_pair_index = 0
         bot.market_pause_pairs = []
         bot.market_pause_recovery_seen = False
+        bot.persist_signal_state = lambda: None
 
     def tearDown(self):
         bot.active_signal = self.saved["active_signal"]
@@ -75,6 +78,8 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.send_market_resume_to_telegram = self.saved["send_resume"]
         bot.send_incomplete_series_to_telegram = self.saved["send_incomplete"]
         bot.market_snapshot = self.saved["market_snapshot"]
+        bot.persist_signal_state = self.saved["persist_signal_state"]
+        bot.telegram_request = self.saved["telegram_request"]
 
     def test_two_losses_become_overlays_then_third_is_final_loss(self):
         overlays, finals, recorded, pauses = [], [], [], []
@@ -229,6 +234,19 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertTrue(bot.deliver_terminal_result(current, 105))
         self.assertEqual([item["result"] for item in sent], ["WIN"])
         self.assertIsNone(bot.active_signal)
+
+    def test_result_requires_confirmed_text_message(self):
+        requests = []
+        bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
+            "ok": True, "message_id": 123,
+        }
+        current = signal(0)
+        current["result"] = "WIN"
+
+        bot.send_result_to_telegram(current)
+
+        self.assertEqual([request[0] for request in requests], ["/send-message"])
+        self.assertIn("✅ ВИГРАШ", requests[0][1]["text"])
 
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []

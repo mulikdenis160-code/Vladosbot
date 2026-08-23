@@ -37,3 +37,13 @@ releasing the lock first creates a new signal with no observable outcome.
 
 **How to apply:** Clear the active or pending series only after the terminal
 message has been successfully delivered.
+
+Terminal outcomes use a canonical Telegram text message with a confirmed
+message identifier; image captions are optional presentation, never proof that
+the user received a result.
+
+**Why:** A media send can be accepted by the bridge yet not surface as the
+expected result message in the chat.
+
+**How to apply:** Gate the next search on a successful text-result delivery
+and log its Telegram message identifier.

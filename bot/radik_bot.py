@@ -74,6 +74,9 @@ TELEGRAM_IMAGES = {
     "win": ASSET_DIR / "win.jpg",
     "loss": ASSET_DIR / "loss.jpg",
 }
+SIGNAL_STATE_FILE = Path(
+    os.getenv("RADIK_SIGNAL_STATE_FILE", "/tmp/radik-signal-state.json")
+)
 
 OTC_PAIRS = [
     "EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "AUDUSD_otc", "USDCAD_otc",
@@ -154,6 +157,51 @@ signal_thread: Optional[threading.Thread] = None
 daily_stats_date = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
 daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
 daily_summary_sent_date: Optional[str] = None
+
+
+def persist_signal_state() -> None:
+    with signal_state_lock:
+        payload = {
+            "active_signal": active_signal,
+            "pending_signal": pending_signal,
+            "saved_at": time.time(),
+        }
+    try:
+        if not payload["active_signal"] and not payload["pending_signal"]:
+            SIGNAL_STATE_FILE.unlink(missing_ok=True)
+            return
+        SIGNAL_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = SIGNAL_STATE_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(SIGNAL_STATE_FILE)
+    except Exception as exc:
+        log.warning("Не вдалося зберегти стан активної серії: %s", type(exc).__name__)
+
+
+def restore_signal_state() -> None:
+    global active_signal, pending_signal
+    try:
+        payload = json.loads(SIGNAL_STATE_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        log.warning("Не вдалося відновити стан активної серії: %s", type(exc).__name__)
+        return
+    active = payload.get("active_signal")
+    pending = payload.get("pending_signal")
+    if not isinstance(active, dict):
+        active = None
+    if not isinstance(pending, dict):
+        pending = None
+    with signal_state_lock:
+        active_signal = active
+        pending_signal = pending
+    if active or pending:
+        restored = active or pending
+        log.warning(
+            "Відновлено незавершену серію %s після перезапуску; новий пошук заблоковано",
+            restored.get("pair", "невідома пара"),
+        )
 market_pause_until = 0.0
 market_pause_started_at = 0.0
 market_pause_last_check = 0.0
@@ -503,11 +551,6 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
         else "➖ НІЧИЯ / ПОВЕРНЕННЯ" if signal["result"] == "DRAW"
         else "⚠️ НЕ ВИЗНАЧЕНО"
     )
-    image_kind = (
-        "win" if signal["result"] == "WIN"
-        else "loss" if signal["result"] == "LOSS"
-        else "summary"
-    )
     text = (
         f"📌 РЕЗУЛЬТАТ • {signal['pair']} OTC\n\n"
         f"{label}\n"
@@ -515,11 +558,11 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
         f"Ціна закриття: {signal.get('close_price', 'немає даних')}\n"
         f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
     )
-    telegram_request("/send-photo", {
-        "image_base64": asset_base64(image_kind),
-        "caption": text,
-        "filename": f"{image_kind}.jpg",
-    })
+    delivery = telegram_request("/send-message", {"text": text})
+    log.info(
+        "Фінальний результат %s підтверджено Telegram message_id=%s",
+        signal["pair"], delivery.get("message_id", "невідомо"),
+    )
 
 
 def send_daily_summary_to_telegram(summary_date: str, stats: dict[str, int]) -> None:
@@ -841,6 +884,7 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         with signal_state_lock:
             active_signal = None
             pending_signal = replacement
+        persist_signal_state()
         log.info(
             "Невдала спроба %s/%s переведена в перекриття %s/%s",
             signal["attempt"] + 1, MAX_OVERLAYS + 1,
@@ -868,6 +912,7 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             log.warning("Не вдалося повідомити про незавершену серію: %s", type(exc).__name__)
         with signal_state_lock:
             active_signal = None
+        persist_signal_state()
         next_signal_at = now + 2
         maybe_send_daily_summary(now)
         return
@@ -888,6 +933,7 @@ def deliver_terminal_result(signal: dict[str, Any], now: float) -> bool:
             active_signal = signal
             if pending_signal is signal:
                 pending_signal = None
+        persist_signal_state()
         next_signal_at = now + 5
         log.warning(
             "Фінальний результат %s не доставлено в Telegram (%s); "
@@ -901,6 +947,7 @@ def deliver_terminal_result(signal: dict[str, Any], now: float) -> bool:
             active_signal = None
         if pending_signal is signal:
             pending_signal = None
+    persist_signal_state()
     next_signal_at = now + 2
     maybe_send_daily_summary(now)
     return True
@@ -965,6 +1012,7 @@ def signal_loop() -> None:
             with signal_state_lock:
                 active_signal = pending
                 pending_signal = None
+            persist_signal_state()
             log.info(
                 "Вхід активовано з нової 1-хв свічки: %s о %s, ціна=%s, експірація=%ss",
                 pending["pair"], entry_time_label(pending["entry_at"]),
@@ -1024,6 +1072,7 @@ def signal_loop() -> None:
                 "Сигнал поставлено в очікування: %s; пошук заблоковано до фінального результату",
                 candidate["pair"],
             )
+        persist_signal_state()
         try:
             send_signal_to_telegram(candidate)
         except Exception as exc:
@@ -1063,9 +1112,23 @@ CORS(app)
 
 @app.get("/health")
 @app.get("/api/healthz")
+@app.get("/api")
 def health():
     latest = max(price_times.values(), default=0)
     pause_remaining = max(0, round(market_pause_until - time.time()))
+    with signal_state_lock:
+        if active_signal is not None:
+            series_state = "active"
+            series_pair = active_signal.get("pair")
+        elif pending_signal is not None:
+            series_state = "pending"
+            series_pair = pending_signal.get("pair")
+        elif signal_searching:
+            series_state = "searching"
+            series_pair = None
+        else:
+            series_state = "idle"
+            series_pair = None
     return jsonify({
         "status": "ok" if connected else "error", "connected": connected,
         "demo": bool(SSID_META["isDemo"]), "pairs_count": len(OTC_PAIRS),
@@ -1074,6 +1137,8 @@ def health():
         "latest_price_age_sec": round(time.time() - latest, 1) if latest else None,
         "market_pause_active": pause_remaining > 0,
         "market_pause_remaining_sec": pause_remaining,
+        "series_state": series_state,
+        "series_pair": series_pair,
         "error": last_error,
     })
 
@@ -1113,6 +1178,7 @@ def signal():
 
 def main() -> None:
     log.info("RADIK AI BOT: пар ≥ %.2f%%, всего OTC-пар %s", MIN_PAYOUT, len(OTC_PAIRS))
+    restore_signal_state()
     connect()
     global signal_thread
     signal_thread = threading.Thread(target=signal_loop, name="signal-scheduler", daemon=True)
