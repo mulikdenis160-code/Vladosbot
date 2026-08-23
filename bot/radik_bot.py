@@ -81,6 +81,7 @@ TELEGRAM_IMAGES = {
     "win": ASSET_DIR / "win.jpg",
     "loss": ASSET_DIR / "loss.jpg",
 }
+FINAL_RESULT_DELIVERY_MODE = "photo-for-win-loss-with-text-fallback"
 SIGNAL_STATE_FILE = Path(
     os.getenv("RADIK_SIGNAL_STATE_FILE", "/tmp/radik-signal-state.json")
 )
@@ -1205,6 +1206,7 @@ def health():
         "latest_price_age_sec": round(time.time() - latest, 1) if latest else None,
         "market_pause_active": pause_remaining > 0,
         "market_pause_remaining_sec": pause_remaining,
+        "final_result_delivery_mode": FINAL_RESULT_DELIVERY_MODE,
         "series_state": series_state,
         "series_pair": series_pair,
         "error": last_error,
