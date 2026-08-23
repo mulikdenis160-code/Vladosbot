@@ -1,0 +1,167 @@
+RADIK AI BOT — LOG PACKAGE
+Generated: 2026-08-23T00:18:42Z
+
+===== LOCAL WORKFLOW LOG =====
+Source: /tmp/logs/RADIK_AI_BOT_20260823_001727_535_eabc1179.log
+workflow: RADIK AI BOT
+status: RUNNING
+run_id: -0naT-fORX7IVVD3Quch5
+timestamp: 2026-08-23T00:17:27.535Z
+
+[1] 340
+Telegram bridge listening on 8010
+2026-08-23 00:17:20,502 [INFO] RADIK AI BOT: пар ≥ 92.00%, всего OTC-пар 20
+2026-08-23 00:17:20.502650 :[INFO]: Modo Demo: True
+2026-08-23 00:17:20.504570 :[INFO]: wss://demo-api-eu.po.market/socket.io/?EIO=4&transport=websocket
+2026-08-23 00:17:20.611170 :[INFO]: CONNECTED SUCCESSFUL
+2026-08-23 00:17:23,503 [INFO] Pocket Option подключён (demo=True)
+2026-08-23 00:17:23,505 [INFO] Планировщик сигналов включён: 09:00:00–23:00:00 Europe/Kyiv, экспирация 120s, перекрытия до 2
+ * Serving Flask app 'radik_bot'
+ * Debug mode: off
+2026-08-23 00:17:23,508 [INFO] WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8008
+ * Running on http://172.24.0.2:8008
+2026-08-23 00:17:23,508 [INFO] Press CTRL+C to quit
+2026-08-23 00:17:27,410 [INFO] 127.0.0.1 - - [23/Aug/2026 00:17:27] "GET /health HTTP/1.1" 200 -
+===== PRODUCTION DEPLOYMENT LOG (last 300 lines) =====
+Source: /tmp/logs/deployment_20260823_001617_808_4561b5a4.log
+deployment
+timestamp: 2026-08-23T00:16:17.808Z
+
+[2026-08-22T16:36:56.776Z INFO] artifact mode enabled runnable=1 static=0
+[2026-08-22T16:36:56.776Z INFO] starting up user application
+[2026-08-22T16:36:56.777Z INFO] metasidecar: loaded enterprise status from environment is_enterprise=false
+[2026-08-22T16:36:56.779Z INFO] starting artifact processes for monorepo deployment
+[2026-08-22T16:36:56.780Z INFO] waiting for runnable artifact ports ports=[8080]
+[2026-08-22T16:36:56.783Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:36:56.784Z INFO] baseline ports snapshot before artifact start ports=[20201 22 44249 1105 1106 20202 1104]
+[2026-08-22T16:36:56.789Z INFO] starting artifact processes count=1
+[2026-08-22T16:36:56.791Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:36:56.796Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:36:56.833Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:36:56.858Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:36:56.920Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:36:57.011Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:36:57.105Z INFO] artifact process started artifact=artifacts/api-server pid=17
+[2026-08-22T16:36:57.110Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:36:58.376Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:36:59.012Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:00.831Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:01.998Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:03.434Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:04.181Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:05.788Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:06.967Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:08.625Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:08.847Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:09.550Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:11.473Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:11.823Z INFO] Telegram bridge listening on 8010
+[2026-08-22T16:37:12.844Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:13.627Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:15.359Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:16.500Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:16.512Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:17.362Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:19.307Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:20.331Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:21.898Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:22.780Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:24.556Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:25.305Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:27.158Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:29.126Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:29.157Z ERROR] /home/runner/workspace/.pythonlibs/lib/python3.13/site-packages/tzlocal/unix.py:208: UserWarning: Can not find any timezone configuration, defaulting to UTC.
+[2026-08-22T16:37:29.157Z ERROR]   warnings.warn("Can not find any timezone configuration, defaulting to UTC.")
+[2026-08-22T16:37:29.755Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:29.867Z ERROR] 2026-08-22 16:37:29,867 [INFO] RADIK AI BOT: пар ≥ 92.00%, всего OTC-пар 20
+[2026-08-22T16:37:30.294Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:31.600Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:32.243Z ERROR] healthcheck failed error=healthcheck /api returned status 500
+[2026-08-22T16:37:32.869Z ERROR] 2026-08-22 16:37:32,869 [INFO] Pocket Option подключён (demo=True)
+[2026-08-22T16:37:32.871Z ERROR] 2026-08-22 16:37:32,870 [INFO] Планировщик сигналов включён: 09:00:00–23:00:00 Europe/Kyiv, экспирация 120s, перекрытия до 2
+[2026-08-22T16:37:32.873Z INFO]  * Debug mode: off
+[2026-08-22T16:37:32.873Z INFO] 2026-08-22 16:37:29.874011 :[INFO]: wss://demo-api-eu.po.market/socket.io/?EIO=4&transport=websocket
+[2026-08-22T16:37:32.873Z INFO] 2026-08-22 16:37:29.867661 :[INFO]: Modo Demo: True
+[2026-08-22T16:37:32.873Z INFO]  * Serving Flask app 'radik_bot'
+[2026-08-22T16:37:32.873Z INFO] 2026-08-22 16:37:30.206025 :[INFO]: CONNECTED SUCCESSFUL
+[2026-08-22T16:37:32.890Z INFO] artifact port detected expected=1 detected=1 port=8080
+[2026-08-22T16:37:32.890Z INFO] all artifact ports detected
+[2026-08-22T16:37:32.891Z INFO] artifact processes running, waiting for signal or process exit
+[2026-08-22T16:37:32.897Z ERROR] 2026-08-22 16:37:32,897 [INFO] [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+[2026-08-22T16:37:32.897Z ERROR]  * Running on all addresses (0.0.0.0)
+[2026-08-22T16:37:32.897Z ERROR]  * Running on http://127.0.0.1:8080
+[2026-08-22T16:37:32.897Z ERROR] 2026-08-22 16:37:32,897 [INFO] [33mPress CTRL+C to quit[0m
+[2026-08-22T16:37:32.897Z ERROR]  * Running on http://10.44.6.219:8080
+[2026-08-22T16:37:33.304Z ERROR] 2026-08-22 16:37:33,304 [INFO] 127.0.0.1 - - [22/Aug/2026 16:37:33] "GET /api/healthz HTTP/1.1" 200 -
+[2026-08-22T16:39:00.547Z ERROR] 2026-08-22 16:39:00,547 [INFO] Вхід активовано з нової 1-хв свічки: EUR/USD о 19:39, ціна=1.23477, експірація=120s
+[2026-08-22T16:42:00.468Z ERROR] 2026-08-22 16:42:00,467 [INFO] Вхід активовано з нової 1-хв свічки: GBP/USD о 19:42, ціна=1.38536, експірація=120s
+[2026-08-22T16:45:00.801Z ERROR] 2026-08-22 16:45:00,801 [INFO] Вхід активовано з нової 1-хв свічки: EUR/JPY о 19:45, ціна=180.572, експірація=120s
+[2026-08-22T16:48:00.127Z ERROR] 2026-08-22 16:48:00,126 [INFO] Вхід активовано з нової 1-хв свічки: EUR/JPY о 19:48, ціна=180.587, експірація=120s
+[2026-08-22T16:51:01.086Z ERROR] 2026-08-22 16:51:01,086 [INFO] Вхід активовано з нової 1-хв свічки: EUR/GBP о 19:51, ціна=0.91357, експірація=120s
+[2026-08-22T16:54:00.730Z ERROR] 2026-08-22 16:54:00,729 [INFO] Вхід активовано з нової 1-хв свічки: EUR/JPY о 19:54, ціна=180.518, експірація=120s
+[2026-08-22T16:57:00.563Z ERROR] 2026-08-22 16:57:00,563 [INFO] Вхід активовано з нової 1-хв свічки: CAD/JPY о 19:57, ціна=117.792, експірація=120s
+[2026-08-22T17:00:00.437Z ERROR] 2026-08-22 17:00:00,437 [INFO] Вхід активовано з нової 1-хв свічки: CHF/JPY о 20:00, ціна=209.363, експірація=120s
+[2026-08-22T17:03:00.183Z ERROR] 2026-08-22 17:03:00,183 [INFO] Вхід активовано з нової 1-хв свічки: EUR/USD о 20:03, ціна=1.23667, експірація=120s
+[2026-08-22T17:06:00.959Z ERROR] 2026-08-22 17:06:00,958 [INFO] Вхід активовано з нової 1-хв свічки: EUR/USD о 20:06, ціна=1.23585, експірація=120s
+[2026-08-22T17:09:00.759Z ERROR] 2026-08-22 17:09:00,758 [INFO] Вхід активовано з нової 1-хв свічки: GBP/USD о 20:09, ціна=1.38556, експірація=120s
+[2026-08-22T17:12:00.133Z ERROR] 2026-08-22 17:12:00,132 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 20:12, ціна=0.77504, експірація=120s
+[2026-08-22T17:15:01.095Z ERROR] 2026-08-22 17:15:01,095 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 20:15, ціна=0.77547, експірація=120s
+[2026-08-22T17:18:00.495Z ERROR] 2026-08-22 17:18:00,495 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 20:18, ціна=0.77697, експірація=120s
+[2026-08-22T17:21:00.212Z ERROR] 2026-08-22 17:21:00,212 [INFO] Вхід активовано з нової 1-хв свічки: EUR/JPY о 20:21, ціна=180.561, експірація=120s
+[2026-08-22T17:24:00.594Z ERROR] 2026-08-22 17:24:00,594 [INFO] Вхід активовано з нової 1-хв свічки: EUR/JPY о 20:24, ціна=180.649, експірація=120s
+[2026-08-22T17:27:00.675Z ERROR] 2026-08-22 17:27:00,674 [INFO] Вхід активовано з нової 1-хв свічки: AUD/CAD о 20:27, ціна=0.8931, експірація=120s
+[2026-08-22T17:30:00.577Z ERROR] 2026-08-22 17:30:00,577 [INFO] Вхід активовано з нової 1-хв свічки: EUR/USD о 20:30, ціна=1.23596, експірація=120s
+[2026-08-22T17:33:00.301Z ERROR] 2026-08-22 17:33:00,301 [INFO] Вхід активовано з нової 1-хв свічки: USD/JPY о 20:33, ціна=157.511, експірація=120s
+[2026-08-22T17:36:00.659Z ERROR] 2026-08-22 17:36:00,659 [INFO] Вхід активовано з нової 1-хв свічки: USD/JPY о 20:36, ціна=157.433, експірація=120s
+[2026-08-22T17:39:00.690Z ERROR] 2026-08-22 17:39:00,690 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 20:39, ціна=0.77592, експірація=120s
+[2026-08-22T17:42:00.708Z ERROR] 2026-08-22 17:42:00,708 [INFO] Вхід активовано з нової 1-хв свічки: GBP/JPY о 20:42, ціна=209.828, експірація=120s
+[2026-08-22T17:45:00.702Z ERROR] 2026-08-22 17:45:00,701 [INFO] Вхід активовано з нової 1-хв свічки: GBP/JPY о 20:45, ціна=209.782, експірація=120s
+[2026-08-22T17:48:00.392Z ERROR] 2026-08-22 17:48:00,391 [INFO] Вхід активовано з нової 1-хв свічки: GBP/JPY о 20:48, ціна=209.469, експірація=120s
+[2026-08-22T17:51:00.780Z ERROR] 2026-08-22 17:51:00,780 [INFO] Вхід активовано з нової 1-хв свічки: GBP/JPY о 20:51, ціна=208.974, експірація=120s
+[2026-08-22T17:54:00.680Z ERROR] 2026-08-22 17:54:00,680 [INFO] Вхід активовано з нової 1-хв свічки: AUD/CAD о 20:54, ціна=0.88753, експірація=120s
+[2026-08-22T17:57:00.874Z ERROR] 2026-08-22 17:57:00,873 [INFO] Вхід активовано з нової 1-хв свічки: AUD/NZD о 20:57, ціна=1.17762, експірація=120s
+[2026-08-22T18:00:01.025Z ERROR] 2026-08-22 18:00:01,025 [INFO] Вхід активовано з нової 1-хв свічки: USD/JPY о 21:00, ціна=157.657, експірація=120s
+[2026-08-22T18:03:00.566Z ERROR] 2026-08-22 18:03:00,566 [INFO] Вхід активовано з нової 1-хв свічки: USD/JPY о 21:03, ціна=157.619, експірація=120s
+[2026-08-22T18:06:00.905Z ERROR] 2026-08-22 18:06:00,905 [INFO] Вхід активовано з нової 1-хв свічки: USD/JPY о 21:06, ціна=157.601, експірація=120s
+[2026-08-22T18:09:00.204Z ERROR] 2026-08-22 18:09:00,204 [INFO] Вхід активовано з нової 1-хв свічки: USD/JPY о 21:09, ціна=157.674, експірація=120s
+[2026-08-22T18:12:00.328Z ERROR] 2026-08-22 18:12:00,328 [INFO] Вхід активовано з нової 1-хв свічки: USD/JPY о 21:12, ціна=157.656, експірація=120s
+[2026-08-22T18:15:00.147Z ERROR] 2026-08-22 18:15:00,146 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 21:15, ціна=0.78007, експірація=120s
+[2026-08-22T18:18:00.364Z ERROR] 2026-08-22 18:18:00,363 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 21:18, ціна=0.78156, експірація=120s
+[2026-08-22T18:21:00.741Z ERROR] 2026-08-22 18:21:00,740 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 21:21, ціна=0.78166, експірація=120s
+[2026-08-22T18:24:00.132Z ERROR] 2026-08-22 18:24:00,131 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 21:24, ціна=0.77977, експірація=120s
+[2026-08-22T18:27:00.404Z ERROR] 2026-08-22 18:27:00,404 [INFO] Вхід активовано з нової 1-хв свічки: NZD/USD о 21:27, ціна=0.60224, експірація=120s
+[2026-08-22T18:30:00.397Z ERROR] 2026-08-22 18:30:00,397 [INFO] Вхід активовано з нової 1-хв свічки: NZD/USD о 21:30, ціна=0.60194, експірація=120s
+[2026-08-22T18:33:00.789Z ERROR] 2026-08-22 18:33:00,788 [INFO] Вхід активовано з нової 1-хв свічки: NZD/USD о 21:33, ціна=0.60158, експірація=120s
+[2026-08-22T18:36:00.220Z ERROR] 2026-08-22 18:36:00,220 [INFO] Вхід активовано з нової 1-хв свічки: NZD/USD о 21:36, ціна=0.60255, експірація=120s
+[2026-08-22T18:39:00.349Z ERROR] 2026-08-22 18:39:00,349 [INFO] Вхід активовано з нової 1-хв свічки: AUD/CAD о 21:39, ціна=0.88452, експірація=120s
+[2026-08-22T18:42:00.551Z ERROR] 2026-08-22 18:42:00,550 [INFO] Вхід активовано з нової 1-хв свічки: AUD/CAD о 21:42, ціна=0.88304, експірація=120s
+[2026-08-22T18:45:00.787Z ERROR] 2026-08-22 18:45:00,786 [INFO] Вхід активовано з нової 1-хв свічки: AUD/CAD о 21:45, ціна=0.88042, експірація=120s
+[2026-08-22T18:48:00.557Z ERROR] 2026-08-22 18:48:00,557 [INFO] Вхід активовано з нової 1-хв свічки: USD/JPY о 21:48, ціна=157.679, експірація=120s
+[2026-08-22T18:51:00.781Z ERROR] 2026-08-22 18:51:00,780 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 21:51, ціна=0.77997, експірація=120s
+[2026-08-22T18:54:00.116Z ERROR] 2026-08-22 18:54:00,116 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 21:54, ціна=0.7813, експірація=120s
+[2026-08-22T18:57:00.338Z ERROR] 2026-08-22 18:57:00,338 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 21:57, ціна=0.78279, експірація=120s
+[2026-08-22T19:00:00.513Z ERROR] 2026-08-22 19:00:00,512 [INFO] Вхід активовано з нової 1-хв свічки: GBP/JPY о 22:00, ціна=210.028, експірація=120s
+[2026-08-22T19:03:00.866Z ERROR] 2026-08-22 19:03:00,865 [INFO] Вхід активовано з нової 1-хв свічки: GBP/JPY о 22:03, ціна=210.263, експірація=120s
+[2026-08-22T19:06:00.815Z ERROR] 2026-08-22 19:06:00,814 [INFO] Вхід активовано з нової 1-хв свічки: GBP/JPY о 22:06, ціна=210.673, експірація=120s
+[2026-08-22T19:09:00.404Z ERROR] 2026-08-22 19:09:00,404 [INFO] Вхід активовано з нової 1-хв свічки: AUD/CAD о 22:09, ціна=0.88322, експірація=120s
+[2026-08-22T19:12:01.006Z ERROR] 2026-08-22 19:12:01,006 [INFO] Вхід активовано з нової 1-хв свічки: AUD/CAD о 22:12, ціна=0.88158, експірація=120s
+[2026-08-22T19:15:00.347Z ERROR] 2026-08-22 19:15:00,347 [INFO] Вхід активовано з нової 1-хв свічки: AUD/CAD о 22:15, ціна=0.88027, експірація=120s
+[2026-08-22T19:18:00.822Z ERROR] 2026-08-22 19:18:00,822 [INFO] Вхід активовано з нової 1-хв свічки: USD/CAD о 22:18, ціна=1.41809, експірація=120s
+[2026-08-22T19:21:00.635Z ERROR] 2026-08-22 19:21:00,635 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 22:21, ціна=0.78589, експірація=120s
+[2026-08-22T19:24:00.328Z ERROR] 2026-08-22 19:24:00,328 [INFO] Вхід активовано з нової 1-хв свічки: USD/CAD о 22:24, ціна=1.41611, експірація=120s
+[2026-08-22T19:27:01.093Z ERROR] 2026-08-22 19:27:01,092 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 22:27, ціна=0.78608, експірація=120s
+[2026-08-22T19:30:00.583Z ERROR] 2026-08-22 19:30:00,583 [INFO] Вхід активовано з нової 1-хв свічки: USD/CHF о 22:30, ціна=0.78485, експірація=120s
+[2026-08-22T19:32:24.920Z ERROR] 2026-08-22 19:32:24,920 [WARNING] Не удалось проверить результат USD/CHF: RuntimeError
+[2026-08-22T19:32:40.302Z ERROR] 2026-08-22 19:32:40,302 [WARNING] Пропущено отримання даних EURJPY_otc: RuntimeError: Таймаут підписки на ринкові дані
+[2026-08-22T19:32:53.307Z ERROR] 2026-08-22 19:32:53,306 [WARNING] Пропущено отримання даних AUDCAD_otc: RuntimeError: Таймаут підписки на ринкові дані
+[2026-08-22T19:34:01.082Z ERROR] 2026-08-22 19:34:01,082 [INFO] Вхід активовано з нової 1-хв свічки: CHF/JPY о 22:34, ціна=210.95, експірація=120s
+[2026-08-22T19:37:00.510Z ERROR] 2026-08-22 19:37:00,509 [INFO] Вхід активовано з нової 1-хв свічки: CHF/JPY о 22:37, ціна=211.149, експірація=120s
+[2026-08-22T19:40:00.995Z ERROR] 2026-08-22 19:40:00,995 [INFO] Вхід активовано з нової 1-хв свічки: CHF/JPY о 22:40, ціна=211.278, експірація=120s
+[2026-08-22T19:43:00.158Z ERROR] 2026-08-22 19:43:00,158 [INFO] Вхід активовано з нової 1-хв свічки: EUR/USD о 22:43, ціна=1.23701, експірація=120s
+[2026-08-22T19:46:00.653Z ERROR] 2026-08-22 19:46:00,653 [INFO] Вхід активовано з нової 1-хв свічки: EUR/USD о 22:46, ціна=1.2364, експірація=120s
+[2026-08-22T19:49:00.870Z ERROR] 2026-08-22 19:49:00,870 [INFO] Вхід активовано з нової 1-хв свічки: EUR/USD о 22:49, ціна=1.23548, експірація=120s
+[2026-08-22T19:52:00.595Z ERROR] 2026-08-22 19:52:00,595 [INFO] Вхід активовано з нової 1-хв свічки: USD/CAD о 22:52, ціна=1.41439, експірація=120s
+[2026-08-22T19:55:00.916Z ERROR] 2026-08-22 19:55:00,916 [INFO] Вхід активовано з нової 1-хв свічки: USD/CAD о 22:55, ціна=1.41432, експірація=120s
+[2026-08-22T19:58:01.015Z ERROR] 2026-08-22 19:58:01,015 [INFO] Вхід активовано з нової 1-хв свічки: USD/CAD о 22:58, ціна=1.41435, експірація=120s
