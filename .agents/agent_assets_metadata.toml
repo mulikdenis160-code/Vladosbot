@@ -14,3 +14,17 @@ mtime_ms = 1787444322071
 storage_uri = "gcs://replit-rams-assets-archer/rams/assets/repl:d7fe2279-2f64-43f1-abee-e4a2565672e7/36ca03fc-c2e4-48eb-80ae-27d899471bcd/fbaa2339-6ab5-425b-a9ed-007b1fd7fee0"
 storage_version_token = "1787444323032128"
 content_type = "text/plain"
+
+[[outputs]]
+id = "tEGYXO56LOnduNcQHU5MQ"
+uri = "file://logs/radik-bot-evening-production.txt"
+type = "text"
+title = "RADIK AI BOT — вечерний production-лог"
+description = "Последние доступные строки production VM: входы, ошибки проверки результата, тайм-ауты и сетевые сбои. Чувствительные данные не включены."
+logical_id = "a6d1e9f8-02a0-47e8-91a1-b2c69e28eb51"
+content_hash = "sha256:4e2a76f706ffd8a1e815b43749141af61731279a7386266b233497a0d4e6473b"
+size = 17068
+mtime_ms = 1787444529420
+storage_uri = "gcs://replit-rams-assets-archer/rams/assets/repl:d7fe2279-2f64-43f1-abee-e4a2565672e7/a6d1e9f8-02a0-47e8-91a1-b2c69e28eb51/a34dbf5e-c929-4271-aeb8-54808e89dd24"
+storage_version_token = "1787444530690475"
+content_type = "text/plain"
