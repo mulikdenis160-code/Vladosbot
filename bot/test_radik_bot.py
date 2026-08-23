@@ -25,6 +25,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.saved = {
             "active_signal": bot.active_signal,
             "pending_signal": bot.pending_signal,
+            "signal_searching": bot.signal_searching,
             "next_signal_at": bot.next_signal_at,
             "pause_until": bot.market_pause_until,
             "pause_started_at": bot.market_pause_started_at,
@@ -45,6 +46,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         }
         bot.active_signal = None
         bot.pending_signal = None
+        bot.signal_searching = False
         bot.market_pause_until = 0
         bot.market_pause_started_at = 0
         bot.market_pause_last_check = 0
@@ -55,6 +57,7 @@ class OverlayAndPauseTests(unittest.TestCase):
     def tearDown(self):
         bot.active_signal = self.saved["active_signal"]
         bot.pending_signal = self.saved["pending_signal"]
+        bot.signal_searching = self.saved["signal_searching"]
         bot.next_signal_at = self.saved["next_signal_at"]
         bot.market_pause_until = self.saved["pause_until"]
         bot.market_pause_started_at = self.saved["pause_started_at"]
@@ -203,6 +206,25 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         self.assertEqual([item["result"] for item in finals], ["WIN", "DRAW", "UNKNOWN"])
         self.assertEqual(pauses, [])
+
+    def test_search_is_blocked_while_a_series_or_search_is_active(self):
+        calls = []
+        original_generate = bot._generate_best_signal
+        bot._generate_best_signal = lambda: calls.append(True) or signal()
+        try:
+            for state in (
+                {"active_signal": signal(0), "pending_signal": None, "signal_searching": False},
+                {"active_signal": None, "pending_signal": signal(1), "signal_searching": False},
+                {"active_signal": None, "pending_signal": None, "signal_searching": True},
+            ):
+                bot.active_signal = state["active_signal"]
+                bot.pending_signal = state["pending_signal"]
+                bot.signal_searching = state["signal_searching"]
+                self.assertTrue(bot.signal_is_in_progress())
+                self.assertIsNone(bot.generate_best_signal())
+        finally:
+            bot._generate_best_signal = original_generate
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

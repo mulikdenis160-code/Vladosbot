@@ -145,6 +145,7 @@ signal_state_lock = threading.Lock()
 daily_stats_lock = threading.Lock()
 active_signal: Optional[dict[str, Any]] = None
 pending_signal: Optional[dict[str, Any]] = None
+signal_searching = False
 next_signal_at = 0.0
 search_started_at = 0.0
 scan_cursor = 0
@@ -367,7 +368,11 @@ def entry_time_label(timestamp: float) -> str:
 
 def signal_is_in_progress() -> bool:
     with signal_state_lock:
-        return active_signal is not None or pending_signal is not None
+        return (
+            active_signal is not None
+            or pending_signal is not None
+            or signal_searching
+        )
 
 
 def result_day(timestamp: float) -> str:
@@ -709,11 +714,19 @@ def monitor_market_pause(now: float) -> bool:
 
 
 def generate_best_signal() -> Optional[dict[str, Any]]:
-    if signal_is_in_progress() or not signal_search_lock.acquire(blocking=False):
+    global signal_searching
+    if not signal_search_lock.acquire(blocking=False):
         return None
+    with signal_state_lock:
+        if active_signal is not None or pending_signal is not None or signal_searching:
+            signal_search_lock.release()
+            return None
+        signal_searching = True
     try:
         return _generate_best_signal()
     finally:
+        with signal_state_lock:
+            signal_searching = False
         signal_search_lock.release()
 
 
@@ -969,6 +982,10 @@ def signal_loop() -> None:
         search_started_at = 0.0
         candidate = schedule_signal_entry(candidate)
         with signal_state_lock:
+            if active_signal is not None or pending_signal is not None:
+                log.warning("Знайдений сигнал відкинуто: інша серія вже активна")
+                next_signal_at = now + 2
+                continue
             pending_signal = candidate
         try:
             send_signal_to_telegram(candidate)
@@ -1038,7 +1055,7 @@ def pairs():
 def signal():
     if signal_is_in_progress():
         return jsonify({
-            "error": "Сигнал уже активний або очікує входу",
+            "error": "Сигнал уже активний, очікує входу або виконується пошук",
             "status": "in_progress",
         }), 409
     best = generate_best_signal()
