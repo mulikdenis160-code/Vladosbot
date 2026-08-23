@@ -207,6 +207,29 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(recorded[0]["result"], "UNKNOWN")
         self.assertIsNone(bot.pending_signal)
 
+    def test_failed_terminal_message_keeps_signal_locked_until_delivery(self):
+        current = signal(2)
+        current["result"] = "WIN"
+        sent, recorded = [], []
+        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+
+        def unavailable(_value):
+            raise ConnectionError("telegram unavailable")
+
+        bot.send_result_to_telegram = unavailable
+        bot.active_signal = current
+        bot.handle_signal_outcome(current, "WIN", 100)
+
+        self.assertEqual(len(recorded), 1)
+        self.assertIs(bot.active_signal, current)
+        self.assertTrue(current["result_delivery_pending"])
+        self.assertTrue(bot.signal_is_in_progress())
+
+        bot.send_result_to_telegram = lambda value: sent.append(deepcopy(value))
+        self.assertTrue(bot.deliver_terminal_result(current, 105))
+        self.assertEqual([item["result"] for item in sent], ["WIN"])
+        self.assertIsNone(bot.active_signal)
+
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))

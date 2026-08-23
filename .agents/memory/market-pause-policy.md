@@ -27,3 +27,13 @@ signal even though the first series has not been resolved.
 
 **How to apply:** Treat pending entry failures and missed entry windows as
 terminal non-loss outcomes before allowing the scheduler to search again.
+
+Final-result delivery is part of completing a series: a transient Telegram
+delivery failure must retain the series lock and retry the result, never release
+the scheduler.
+
+**Why:** A result that exists only in process state is not visible to the user;
+releasing the lock first creates a new signal with no observable outcome.
+
+**How to apply:** Clear the active or pending series only after the terminal
+message has been successfully delivered.

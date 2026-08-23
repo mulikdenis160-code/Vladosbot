@@ -872,16 +872,38 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         maybe_send_daily_summary(now)
         return
     record_signal_result(signal)
+    signal["result_recorded"] = True
+    if outcome == "LOSS" and not has_overlay_left:
+        start_market_pause(now, signal)
+    deliver_terminal_result(signal, now)
+
+
+def deliver_terminal_result(signal: dict[str, Any], now: float) -> bool:
+    global active_signal, pending_signal, next_signal_at
     try:
         send_result_to_telegram(signal)
     except Exception as exc:
-        log.warning("Не вдалося надіслати підсумок у Telegram: %s", type(exc).__name__)
+        signal["result_delivery_pending"] = True
+        with signal_state_lock:
+            active_signal = signal
+            if pending_signal is signal:
+                pending_signal = None
+        next_signal_at = now + 5
+        log.warning(
+            "Фінальний результат %s не доставлено в Telegram (%s); "
+            "серія залишається заблокованою, повтор через 5с",
+            signal["pair"], type(exc).__name__,
+        )
+        return False
+    signal.pop("result_delivery_pending", None)
     with signal_state_lock:
-        active_signal = None
-    if outcome == "LOSS" and not has_overlay_left:
-        start_market_pause(now, signal)
+        if active_signal is signal:
+            active_signal = None
+        if pending_signal is signal:
+            pending_signal = None
     next_signal_at = now + 2
     maybe_send_daily_summary(now)
+    return True
 
 
 def finalize_pending_signal(
@@ -895,17 +917,8 @@ def finalize_pending_signal(
         signal["pair"], reason,
     )
     record_signal_result(signal)
-    try:
-        send_result_to_telegram(signal)
-    except Exception as exc:
-        log.warning("Не вдалося надіслати результат неактивованого сигналу: %s", type(exc).__name__)
-    with signal_state_lock:
-        if pending_signal is signal:
-            pending_signal = None
-        if active_signal is signal:
-            active_signal = None
-    next_signal_at = now + 2
-    maybe_send_daily_summary(now)
+    signal["result_recorded"] = True
+    deliver_terminal_result(signal, now)
 
 
 def signal_loop() -> None:
@@ -916,6 +929,9 @@ def signal_loop() -> None:
         now = time.time()
         with signal_state_lock:
             current = active_signal
+        if current and current.get("result_delivery_pending"):
+            deliver_terminal_result(current, now)
+            continue
         if current and now >= current["expires_at"]:
             outcome = evaluate_signal(current)
             handle_signal_outcome(current, outcome, now)
