@@ -21,7 +21,7 @@ args = ["pnpm", "--filter", "@workspace/api-server", "run", "build"]
 NODE_ENV = "production"
 
 [services.production.run]
-args = ["sh", "-c", "node bot/telegram_bridge.mjs & exec uv run python bot/radik_bot.py"]
+args = ["sh", "-c", "node bot/telegram_bridge.mjs & while true; do uv run python bot/radik_bot.py; code=$?; echo \"RADIK bot exited with code $code, restarting in 5s\"; sleep 5; done"]
 
 [services.production.run.env]
 PORT = "8080"

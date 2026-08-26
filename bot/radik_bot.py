@@ -149,6 +149,14 @@ price_cache: dict[str, float] = {}
 price_times: dict[str, float] = {}
 candle_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="candles")
 market_request_lock = threading.Lock()
+# All calls into the PocketOption client (connect/get_payout/ChangeSymbol/
+# get_server_timestamp/balance) must be serialized behind this lock. The
+# underlying websocket client is not thread-safe; concurrent access from the
+# scheduler thread, Flask request threads, and the candle worker thread caused
+# a native "malloc(): unsorted double linked list corrupted" crash that killed
+# the whole process with no way to recover in Python (see market-pause-policy
+# memory notes). Use RLock because connect() and market_snapshot() may nest.
+api_lock = threading.RLock()
 analysis_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="analysis")
 signal_search_lock = threading.Lock()
 signal_stop = threading.Event()
@@ -242,7 +250,8 @@ def refresh_payouts(force: bool = False) -> dict[str, float]:
     if payout_cache and not force and time.time() - payout_cache_at < 30:
         return payout_cache
     try:
-        raw = api.get_payout()
+        with api_lock:
+            raw = api.get_payout()
         if isinstance(raw, str):
             raw = json.loads(raw)
         fresh: dict[str, float] = {}
@@ -266,28 +275,29 @@ def refresh_payouts(force: bool = False) -> dict[str, float]:
 def market_snapshot(active: str) -> dict[str, Any]:
     if not connected or api is None:
         raise RuntimeError(last_error or "Не подключено")
-    with market_request_lock:
-        api.api.history_new = None
-        future = candle_pool.submit(api.ChangeSymbol, active, 60)
-        try:
-            if not future.result(timeout=CANDLE_TIMEOUT_SEC):
-                raise RuntimeError("Свечі не отримані")
-        except FutureTimeoutError as exc:
-            raise RuntimeError("Таймаут підписки на ринкові дані") from exc
-    market = global_value.pairs.get(active) or {}
-    candles = market.get("history") or []
-    ticks = market.get("ticks") or []
-    if len(candles) < 15:
-        raise RuntimeError("Недостаточно свечей")
-    live = next(
-        (item for item in reversed(ticks)
-         if isinstance(item, dict) and item.get("price") is not None),
-        None,
-    )
-    if not live:
-        raise RuntimeError("Нет live-котировки")
-    price = float(live["price"])
-    server_now = float(api.get_server_timestamp() or time.time())
+    with api_lock:
+        with market_request_lock:
+            api.api.history_new = None
+            future = candle_pool.submit(api.ChangeSymbol, active, 60)
+            try:
+                if not future.result(timeout=CANDLE_TIMEOUT_SEC):
+                    raise RuntimeError("Свечі не отримані")
+            except FutureTimeoutError as exc:
+                raise RuntimeError("Таймаут підписки на ринкові дані") from exc
+        market = global_value.pairs.get(active) or {}
+        candles = market.get("history") or []
+        ticks = market.get("ticks") or []
+        if len(candles) < 15:
+            raise RuntimeError("Недостаточно свечей")
+        live = next(
+            (item for item in reversed(ticks)
+             if isinstance(item, dict) and item.get("price") is not None),
+            None,
+        )
+        if not live:
+            raise RuntimeError("Нет live-котировки")
+        price = float(live["price"])
+        server_now = float(api.get_server_timestamp() or time.time())
     tick_time = float(live.get("time") or 0)
     age = max(0.0, server_now - tick_time) if tick_time else MAX_PRICE_AGE_SEC + 1
     if age > MAX_PRICE_AGE_SEC:
@@ -1152,21 +1162,22 @@ def signal_loop() -> None:
 def connect() -> bool:
     global api, connected, last_error, last_balance
     try:
-        api = PocketOption(bool(SSID_META["isDemo"]), SSID)
-        api.connect()
-        time.sleep(3)
-        for method_name in ("get_balance", "GetBalance", "getbalance"):
-            method = getattr(api, method_name, None)
-            if callable(method):
-                try:
-                    balance = method()
-                    if balance is not None:
-                        last_balance = float(balance)
-                        connected, last_error = True, None
-                        log.info("Pocket Option подключён (demo=%s)", bool(SSID_META["isDemo"]))
-                        return True
-                except Exception:
-                    continue
+        with api_lock:
+            api = PocketOption(bool(SSID_META["isDemo"]), SSID)
+            api.connect()
+            time.sleep(3)
+            for method_name in ("get_balance", "GetBalance", "getbalance"):
+                method = getattr(api, method_name, None)
+                if callable(method):
+                    try:
+                        balance = method()
+                        if balance is not None:
+                            last_balance = float(balance)
+                            connected, last_error = True, None
+                            log.info("Pocket Option подключён (demo=%s)", bool(SSID_META["isDemo"]))
+                            return True
+                    except Exception:
+                        continue
         last_error = "Баланс не получен: проверь SSID"
     except Exception as exc:
         last_error = "Ошибка подключения Pocket Option: " + str(exc)
