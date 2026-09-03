@@ -49,7 +49,7 @@ GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC
 SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
 PRICE_RETRY_TIMEOUT_SEC = max(1, int(os.getenv("PRICE_RETRY_TIMEOUT_SEC", "15")))
 MAX_OVERLAYS = min(2, max(0, int(os.getenv("MAX_OVERLAYS", "2"))))
-MARKET_PAUSE_SEC = max(30 * 60, int(os.getenv("MARKET_PAUSE_SEC", str(30 * 60))))
+MARKET_PAUSE_SEC = max(20 * 60, int(os.getenv("MARKET_PAUSE_SEC", str(20 * 60))))
 STARTUP_SAFETY_PAUSE_SEC = max(
     0, int(os.getenv("STARTUP_SAFETY_PAUSE_SEC", str(MARKET_PAUSE_SEC)))
 )
