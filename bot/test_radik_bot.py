@@ -44,8 +44,13 @@ class OverlayAndPauseTests(unittest.TestCase):
             "send_startup_pause": bot.send_startup_safety_pause_to_telegram,
             "send_incomplete": bot.send_incomplete_series_to_telegram,
             "market_snapshot": bot.market_snapshot,
+            "recovery_signal": bot.recovery_signal_after_loss,
             "persist_signal_state": bot.persist_signal_state,
             "telegram_request": bot.telegram_request,
+            "daily_signal_count": bot.daily_signal_count,
+            "daily_signal_count_date": bot.daily_signal_count_date,
+            "max_daily_signals": bot.MAX_DAILY_SIGNALS,
+            "next_signal_at": bot.next_signal_at,
         }
         bot.active_signal = None
         bot.pending_signal = None
@@ -56,6 +61,16 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.market_pause_pair_index = 0
         bot.market_pause_pairs = []
         bot.market_pause_recovery_seen = False
+        bot.recovery_signal_after_loss = lambda value: {
+            **value,
+            "direction": value["direction"],
+            "confidence": 90,
+            "quality_score": 90,
+            "entry_price": value.get("close_price", value["entry_price"]),
+            "reason": "confirmed recovery",
+        }
+        bot.daily_signal_count = 0
+        bot.daily_signal_count_date = bot.daily_stats_date
         bot.persist_signal_state = lambda: None
 
     def tearDown(self):
@@ -80,8 +95,13 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.send_startup_safety_pause_to_telegram = self.saved["send_startup_pause"]
         bot.send_incomplete_series_to_telegram = self.saved["send_incomplete"]
         bot.market_snapshot = self.saved["market_snapshot"]
+        bot.recovery_signal_after_loss = self.saved["recovery_signal"]
         bot.persist_signal_state = self.saved["persist_signal_state"]
         bot.telegram_request = self.saved["telegram_request"]
+        bot.daily_signal_count = self.saved["daily_signal_count"]
+        bot.daily_signal_count_date = self.saved["daily_signal_count_date"]
+        bot.MAX_DAILY_SIGNALS = self.saved["max_daily_signals"]
+        bot.next_signal_at = self.saved["next_signal_at"]
 
     def test_two_losses_become_overlays_then_third_is_final_loss(self):
         overlays, finals, recorded, pauses = [], [], [], []
@@ -332,6 +352,40 @@ class OverlayAndPauseTests(unittest.TestCase):
         finally:
             bot._generate_best_signal = original_generate
         self.assertEqual(calls, [])
+
+    def test_daily_signal_limit_reserves_at_most_configured_slots(self):
+        bot.MAX_DAILY_SIGNALS = 2
+        self.assertTrue(bot.reserve_daily_signal_slot(100))
+        self.assertTrue(bot.reserve_daily_signal_slot(100))
+        self.assertFalse(bot.reserve_daily_signal_slot(100))
+        self.assertTrue(bot.daily_signal_limit_reached(100))
+
+    def test_weak_or_contradictory_setups_are_rejected(self):
+        snapshot = {
+            "trend": "up",
+            "volatility": 0.01,
+            "closes": [1.0, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07],
+        }
+        accepted = {"direction": "ВГОРУ", "confidence": 85}
+        rejected = {"direction": "ВНИЗ", "confidence": 99}
+        self.assertTrue(bot.signal_passes_quality(accepted, snapshot))
+        self.assertFalse(bot.signal_passes_quality(rejected, snapshot))
+
+    def test_loss_without_fresh_confirmation_does_not_open_overlay(self):
+        finals, recorded = [], []
+        bot.in_signal_window = lambda: True
+        bot.recovery_signal_after_loss = lambda value: None
+        bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
+        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+        current = signal(0)
+        bot.active_signal = current
+
+        bot.handle_signal_outcome(current, "LOSS", 100)
+
+        self.assertEqual(len(finals), 1)
+        self.assertTrue(finals[0]["recovery_skipped"])
+        self.assertEqual(len(recorded), 1)
+        self.assertIsNone(bot.pending_signal)
 
 
 if __name__ == "__main__":
