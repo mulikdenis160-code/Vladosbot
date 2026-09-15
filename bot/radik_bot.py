@@ -64,7 +64,7 @@ PRICE_RETRY_TIMEOUT_SEC = max(1, int(os.getenv("PRICE_RETRY_TIMEOUT_SEC", "15"))
 MAX_OVERLAYS = min(2, max(0, int(os.getenv("MAX_OVERLAYS", "2"))))
 MARKET_PAUSE_SEC = max(20 * 60, int(os.getenv("MARKET_PAUSE_SEC", str(20 * 60))))
 STARTUP_SAFETY_PAUSE_SEC = max(
-    0, int(os.getenv("STARTUP_SAFETY_PAUSE_SEC", str(MARKET_PAUSE_SEC)))
+    0, int(os.getenv("STARTUP_SAFETY_PAUSE_SEC", "0"))
 )
 MARKET_MONITOR_INTERVAL_SEC = max(
     30, int(os.getenv("MARKET_MONITOR_INTERVAL_SEC", "60"))
@@ -1447,8 +1447,6 @@ def main() -> None:
     log.info("RADIK AI BOT: пар ≥ %.2f%%, всего OTC-пар %s", MIN_PAYOUT, len(OTC_PAIRS))
     restore_signal_state()
     connect()
-    if active_signal is None and pending_signal is None:
-        start_startup_safety_pause(time.time())
     global signal_thread
     signal_thread = threading.Thread(target=signal_loop, name="signal-scheduler", daemon=True)
     signal_thread.start()

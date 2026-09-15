@@ -59,5 +59,6 @@ favorable sample never releases the pause.
 **Why:** One pair can look healthy while the broader OTC market remains
 unstable, which made a one-sample pause decision inconsistent.
 
-**How to apply:** Production restarts begin with a neutral safety pause, and
-only the production VM may send Telegram signals; never run a local bot beside it.
+**How to apply:** A normal production restart must not create a Telegram pause;
+only a real third-failure market pause may do that. Only the production VM may
+send Telegram signals; never run a local bot beside it.

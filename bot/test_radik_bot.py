@@ -161,11 +161,16 @@ class OverlayAndPauseTests(unittest.TestCase):
     def test_startup_safety_pause_blocks_search_after_a_restart(self):
         messages = []
         bot.send_startup_safety_pause_to_telegram = lambda minutes: messages.append(minutes)
+        original_pause = bot.STARTUP_SAFETY_PAUSE_SEC
+        bot.STARTUP_SAFETY_PAUSE_SEC = 1200
 
-        bot.start_startup_safety_pause(100)
+        try:
+            bot.start_startup_safety_pause(100)
+        finally:
+            bot.STARTUP_SAFETY_PAUSE_SEC = original_pause
 
-        self.assertEqual(bot.market_pause_until, 100 + bot.STARTUP_SAFETY_PAUSE_SEC)
-        self.assertEqual(messages, [bot.STARTUP_SAFETY_PAUSE_SEC // 60])
+        self.assertEqual(bot.market_pause_until, 1300)
+        self.assertEqual(messages, [20])
         self.assertEqual(len(bot.market_pause_pairs), bot.MARKET_MONITOR_PAIRS)
 
     def test_pause_resumes_only_after_minimum_duration_and_recovery(self):
