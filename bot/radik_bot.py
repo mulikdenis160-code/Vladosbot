@@ -345,21 +345,21 @@ def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
     if now < gemini_next_request_at:
         raise RuntimeError("Gemini cooldown")
     gemini_next_request_at = now + GEMINI_MIN_REQUEST_INTERVAL_SEC
+    key = os.getenv("GEMINI_API_KEY", "").strip()
     replit_base_url = os.getenv("AI_INTEGRATIONS_GEMINI_BASE_URL", "").strip().rstrip("/")
     replit_key = os.getenv("AI_INTEGRATIONS_GEMINI_API_KEY", "").strip()
-    if replit_base_url and replit_key:
+    if key:
+        model = GEMINI_MODEL
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        headers = {}
+        source = "gemini"
+    elif replit_base_url and replit_key:
         model = REPLIT_GEMINI_MODEL
         api_url = f"{replit_base_url}/models/{model}:generateContent"
         headers = {"x-goog-api-key": replit_key}
         source = "replit-gemini"
     else:
-        key = os.getenv("GEMINI_API_KEY", "").strip()
-        if not key:
-            raise RuntimeError("Gemini API не настроен")
-        model = GEMINI_MODEL
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        headers = {}
-        source = "gemini"
+        raise RuntimeError("Gemini API не настроен")
     prompt = (
         "Ти аналізуєш короткостроковий ринок бінарних опціонів. "
         "Це освітній аналітичний сигнал, а не гарантія прибутку. "
