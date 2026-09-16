@@ -46,25 +46,12 @@ SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
 SIGNAL_RETRY_DELAY_SEC = max(30, int(os.getenv("SIGNAL_RETRY_DELAY_SEC", "300")))
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
 GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC", "15"))
-MIN_SIGNAL_CONFIDENCE = min(100, max(0, int(os.getenv("MIN_SIGNAL_CONFIDENCE", "80"))))
-MIN_SIGNAL_QUALITY = min(100, max(0, int(os.getenv("MIN_SIGNAL_QUALITY", "72"))))
-MAX_DAILY_SIGNALS = max(1, int(os.getenv("MAX_DAILY_SIGNALS", "50")))
-POST_SERIES_COOLDOWN_SEC = max(
-    60, int(os.getenv("POST_SERIES_COOLDOWN_SEC", str(10 * 60)))
-)
-POST_LOSS_COOLDOWN_SEC = max(
-    POST_SERIES_COOLDOWN_SEC,
-    int(os.getenv("POST_LOSS_COOLDOWN_SEC", str(15 * 60))),
-)
-LOSS_RECOVERY_MIN_CONFIDENCE = min(
-    100, max(0, int(os.getenv("LOSS_RECOVERY_MIN_CONFIDENCE", str(MIN_SIGNAL_CONFIDENCE)))
-))
 SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
 PRICE_RETRY_TIMEOUT_SEC = max(1, int(os.getenv("PRICE_RETRY_TIMEOUT_SEC", "15")))
 MAX_OVERLAYS = min(2, max(0, int(os.getenv("MAX_OVERLAYS", "2"))))
 MARKET_PAUSE_SEC = max(20 * 60, int(os.getenv("MARKET_PAUSE_SEC", str(20 * 60))))
 STARTUP_SAFETY_PAUSE_SEC = max(
-    0, int(os.getenv("STARTUP_SAFETY_PAUSE_SEC", "0"))
+    0, int(os.getenv("STARTUP_SAFETY_PAUSE_SEC", str(MARKET_PAUSE_SEC)))
 )
 MARKET_MONITOR_INTERVAL_SEC = max(
     30, int(os.getenv("MARKET_MONITOR_INTERVAL_SEC", "60"))
@@ -185,29 +172,18 @@ gemini_next_request_at = 0.0
 signal_thread: Optional[threading.Thread] = None
 daily_stats_date = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
 daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
-daily_signal_count_date = daily_stats_date
-daily_signal_count = 0
 daily_summary_sent_date: Optional[str] = None
 
 
 def persist_signal_state() -> None:
-    with daily_stats_lock:
-        saved_daily_signal_count_date = daily_signal_count_date
-        saved_daily_signal_count = daily_signal_count
     with signal_state_lock:
         payload = {
             "active_signal": active_signal,
             "pending_signal": pending_signal,
             "saved_at": time.time(),
-            "daily_signal_count_date": saved_daily_signal_count_date,
-            "daily_signal_count": saved_daily_signal_count,
         }
     try:
-        if (
-            not payload["active_signal"]
-            and not payload["pending_signal"]
-            and not payload["daily_signal_count"]
-        ):
+        if not payload["active_signal"] and not payload["pending_signal"]:
             SIGNAL_STATE_FILE.unlink(missing_ok=True)
             return
         SIGNAL_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -219,7 +195,7 @@ def persist_signal_state() -> None:
 
 
 def restore_signal_state() -> None:
-    global active_signal, pending_signal, daily_signal_count_date, daily_signal_count
+    global active_signal, pending_signal
     try:
         payload = json.loads(SIGNAL_STATE_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -236,19 +212,6 @@ def restore_signal_state() -> None:
     with signal_state_lock:
         active_signal = active
         pending_signal = pending
-    saved_count_date = str(payload.get("daily_signal_count_date") or "")
-    try:
-        saved_count = max(0, int(payload.get("daily_signal_count") or 0))
-    except (TypeError, ValueError):
-        saved_count = 0
-    current_day = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
-    with daily_stats_lock:
-        if saved_count_date == current_day:
-            daily_signal_count_date = saved_count_date
-            daily_signal_count = saved_count
-        else:
-            daily_signal_count_date = current_day
-            daily_signal_count = 0
     if active or pending:
         restored = active or pending
         log.warning(
@@ -382,27 +345,24 @@ def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
     if now < gemini_next_request_at:
         raise RuntimeError("Gemini cooldown")
     gemini_next_request_at = now + GEMINI_MIN_REQUEST_INTERVAL_SEC
-    key = os.getenv("GEMINI_API_KEY", "").strip()
     replit_base_url = os.getenv("AI_INTEGRATIONS_GEMINI_BASE_URL", "").strip().rstrip("/")
     replit_key = os.getenv("AI_INTEGRATIONS_GEMINI_API_KEY", "").strip()
-    if key:
-        model = GEMINI_MODEL
-        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        headers = {}
-        source = "gemini"
-    elif replit_base_url and replit_key:
+    if replit_base_url and replit_key:
         model = REPLIT_GEMINI_MODEL
         api_url = f"{replit_base_url}/models/{model}:generateContent"
         headers = {"x-goog-api-key": replit_key}
         source = "replit-gemini"
     else:
-        raise RuntimeError("Gemini API не настроен")
+        key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not key:
+            raise RuntimeError("Gemini API не настроен")
+        model = GEMINI_MODEL
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        headers = {}
+        source = "gemini"
     prompt = (
         "Ти аналізуєш короткостроковий ринок бінарних опціонів. "
         "Це освітній аналітичний сигнал, а не гарантія прибутку. "
-        "Працюй як суворий фільтр: якщо тренд слабкий, свічки суперечливі, "
-        "рух плаский або напрямок не підтверджений більшістю останніх свічок, "
-        "поверни confidence нижче порогу і не рекомендуй угоду. "
         'Поверни лише JSON виду {"direction":"ВГОРУ" або "ВНИЗ",'
         '"confidence":0-100,"reason":"коротко українською мовою"}. '
         f"Пара {snapshot['active']}, ціна {snapshot['price']}, тренд {snapshot['trend']}, "
@@ -441,75 +401,6 @@ def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
         "reason": str(result.get("reason", "Аналіз завершено")),
         "source": source,
     }
-
-
-def signal_quality_score(snapshot: dict[str, Any], direction: str) -> int:
-    closes = [
-        float(value) for value in snapshot.get("closes", [])
-        if value is not None
-    ]
-    if len(closes) < 8:
-        return 0
-    expected_trend = "up" if direction == "ВГОРУ" else "down"
-    if snapshot.get("trend") != expected_trend:
-        return 0
-    recent = closes[-8:]
-    deltas = [recent[index] - recent[index - 1] for index in range(1, len(recent))]
-    aligned = sum(
-        delta > 0 if direction == "ВГОРУ" else delta < 0
-        for delta in deltas
-    )
-    agreement_score = aligned / len(deltas) * 60
-    movement = abs(recent[-1] - recent[0])
-    volatility = max(float(snapshot.get("volatility") or 0), abs(recent[-1]) * 1e-8)
-    movement_score = min(1.0, movement / max(volatility * 1.5, 1e-12)) * 40
-    return round(agreement_score + movement_score)
-
-
-def signal_passes_quality(
-    analysis: dict[str, Any], snapshot: dict[str, Any], recovery: bool = False
-) -> bool:
-    confidence_threshold = (
-        LOSS_RECOVERY_MIN_CONFIDENCE if recovery else MIN_SIGNAL_CONFIDENCE
-    )
-    quality = signal_quality_score(snapshot, analysis["direction"])
-    analysis["quality_score"] = quality
-    if analysis["confidence"] < confidence_threshold or quality < MIN_SIGNAL_QUALITY:
-        log.info(
-            "Сетап відхилено: %s confidence=%s/%s quality=%s/%s",
-            snapshot.get("active"), analysis["confidence"], confidence_threshold,
-            quality, MIN_SIGNAL_QUALITY,
-        )
-        return False
-    return True
-
-
-def recovery_signal_after_loss(signal: dict[str, Any]) -> Optional[dict[str, Any]]:
-    if time.monotonic() < gemini_next_request_at:
-        return None
-    try:
-        snapshot = market_snapshot(signal["raw_pair"])
-        analysis = gemini_analysis(snapshot)
-        if analysis["direction"] != signal["direction"]:
-            log.info(
-                "Перекриття не підтверджено: напрямок змінився з %s на %s",
-                signal["direction"], analysis["direction"],
-            )
-            return None
-        if not signal_passes_quality(analysis, snapshot, recovery=True):
-            return None
-        return {
-            **signal,
-            **analysis,
-            "entry_price": snapshot["price"],
-            "image_base64": chart_png(snapshot, analysis["direction"]),
-        }
-    except Exception as exc:
-        log.warning(
-            "Не вдалося повторно підтвердити сигнал після мінусу: %s",
-            type(exc).__name__,
-        )
-        return None
 
 
 def in_signal_window() -> bool:
@@ -554,44 +445,17 @@ def result_day(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
 
 
-def roll_daily_counters(timestamp: float = 0.0) -> None:
-    global daily_stats_date, daily_stats
-    global daily_signal_count_date, daily_signal_count
-    day = result_day(timestamp or time.time())
-    with daily_stats_lock:
-        if daily_stats_date != day:
-            daily_stats_date = day
-            daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
-        if daily_signal_count_date != day:
-            daily_signal_count_date = day
-            daily_signal_count = 0
-
-
-def daily_signal_limit_reached(timestamp: float = 0.0) -> bool:
-    roll_daily_counters(timestamp)
-    with daily_stats_lock:
-        return daily_signal_count >= MAX_DAILY_SIGNALS
-
-
-def reserve_daily_signal_slot(timestamp: float = 0.0) -> bool:
-    global daily_signal_count
-    roll_daily_counters(timestamp)
-    with daily_stats_lock:
-        if daily_signal_count >= MAX_DAILY_SIGNALS:
-            return False
-        daily_signal_count += 1
-    persist_signal_state()
-    return True
-
-
 def record_signal_result(signal: dict[str, Any]) -> None:
+    global daily_stats_date, daily_stats
     timestamp = float(signal.get("entry_at") or signal.get("created_at") or time.time())
     day = result_day(timestamp)
     outcome = signal.get("result", "UNKNOWN")
     if outcome not in {"WIN", "LOSS", "DRAW", "UNKNOWN"}:
         outcome = "UNKNOWN"
-    roll_daily_counters(timestamp)
     with daily_stats_lock:
+        if day != daily_stats_date:
+            daily_stats_date = day
+            daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
         daily_stats["total"] += 1
         daily_stats[outcome] += 1
 
@@ -712,11 +576,6 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
         f"Ціна закриття: {signal.get('close_price', 'немає даних')}\n"
         f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
     )
-    if signal.get("recovery_skipped"):
-        text += (
-            "\n\n⚠️ Після мінусу нове перекриття не відкрито: "
-            "впевнений повторний сигнал не підтверджено."
-        )
     image_kind = {"WIN": "win", "LOSS": "loss"}.get(signal.get("result"))
     image = asset_base64(image_kind) if image_kind else ""
     try:
@@ -749,7 +608,6 @@ def send_daily_summary_to_telegram(summary_date: str, stats: dict[str, int]) -> 
     net_label = f"+{net}" if net > 0 else str(net)
     text = (
         f"📊 ПІДСУМОК ДНЯ • {summary_date}\n\n"
-        f"📌 Сигналів/серій: {stats.get('signals', 0)}/{MAX_DAILY_SIGNALS}\n"
         f"Усього спроб: {stats['total']}\n"
         f"✅ Виграшів: {stats['WIN']}\n"
         f"❌ Програшів: {stats['LOSS']}\n"
@@ -765,7 +623,7 @@ def send_daily_summary_to_telegram(summary_date: str, stats: dict[str, int]) -> 
 
 
 def maybe_send_daily_summary(now: float) -> None:
-    global daily_summary_sent_date
+    global daily_summary_sent_date, daily_stats_date, daily_stats
     local_now = datetime.fromtimestamp(now, ZoneInfo(SIGNAL_TIMEZONE))
     if local_now.time() < SIGNAL_END:
         return
@@ -773,12 +631,13 @@ def maybe_send_daily_summary(now: float) -> None:
         if active_signal is not None or pending_signal is not None:
             return
     summary_date = local_now.date().isoformat()
-    roll_daily_counters(now)
     with daily_stats_lock:
         if daily_summary_sent_date == summary_date:
             return
+        if daily_stats_date != summary_date:
+            daily_stats_date = summary_date
+            daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
         stats = dict(daily_stats)
-        stats["signals"] = daily_signal_count
         daily_summary_sent_date = summary_date
     try:
         send_daily_summary_to_telegram(summary_date, stats)
@@ -995,8 +854,6 @@ def generate_best_signal() -> Optional[dict[str, Any]]:
 
 def _generate_best_signal() -> Optional[dict[str, Any]]:
     global scan_cursor
-    if daily_signal_limit_reached():
-        return None
     if time.monotonic() < gemini_next_request_at:
         return None
     payouts = refresh_payouts(force=True)
@@ -1026,8 +883,6 @@ def _generate_best_signal() -> Optional[dict[str, Any]]:
         active, snapshot = item
         try:
             analysis = gemini_analysis(snapshot)
-            if not signal_passes_quality(analysis, snapshot):
-                return None
             return {
                 **analysis, "pair": display_pair(active), "raw_pair": active,
                 "payout": payouts[active], "entry_price": snapshot["price"],
@@ -1098,37 +953,33 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
     )
     has_overlay_left = signal["attempt"] < MAX_OVERLAYS
     if outcome == "LOSS" and has_overlay_left and in_signal_window():
-        recovery = recovery_signal_after_loss(signal)
-        if recovery:
-            replacement = dict(recovery)
-            replacement["attempt"] += 1
-            replacement["result"] = None
-            replacement.pop("close_price", None)
-            replacement = schedule_signal_entry(replacement)
-            with signal_state_lock:
-                active_signal = None
-                pending_signal = replacement
-            persist_signal_state()
-            log.info(
-                "Після мінусу підтверджено нове перекриття %s/%s: confidence=%s quality=%s",
-                replacement["attempt"], MAX_OVERLAYS,
-                replacement["confidence"], replacement["quality_score"],
-            )
-            try:
-                send_signal_to_telegram(
-                    replacement,
-                    f"🔁 ПЕРЕКРИТТЯ {replacement['attempt']}/{MAX_OVERLAYS}\n",
-                    "overlay",
-                )
-            except Exception as exc:
-                log.warning("Не вдалося надіслати перекриття у Telegram: %s", type(exc).__name__)
-            return
-        signal["recovery_skipped"] = True
+        replacement = dict(signal)
+        replacement["attempt"] += 1
+        replacement["entry_price"] = signal.get("close_price", signal["entry_price"])
+        replacement["result"] = None
+        replacement.pop("close_price", None)
+        replacement["image_base64"] = ""
+        replacement = schedule_signal_entry(replacement)
+        with signal_state_lock:
+            active_signal = None
+            pending_signal = replacement
+        persist_signal_state()
         log.info(
-            "Після мінусу нове перекриття не підтверджено; серію завершено без додаткового входу"
+            "Невдала спроба %s/%s переведена в перекриття %s/%s",
+            signal["attempt"] + 1, MAX_OVERLAYS + 1,
+            replacement["attempt"], MAX_OVERLAYS,
         )
+        try:
+            send_signal_to_telegram(
+                replacement,
+                f"🔁 ПЕРЕКРИТТЯ {replacement['attempt']}/{MAX_OVERLAYS}\n",
+                "overlay",
+            )
+        except Exception as exc:
+            log.warning("Не вдалося надіслати перекриття у Telegram: %s", type(exc).__name__)
+        return
 
-    if outcome == "LOSS" and has_overlay_left and not in_signal_window():
+    if outcome == "LOSS" and has_overlay_left:
         log.warning(
             "Серію %s не продовжено: наступне перекриття поза робочим вікном; "
             "проміжний результат не враховано",
@@ -1141,7 +992,7 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         with signal_state_lock:
             active_signal = None
         persist_signal_state()
-        next_signal_at = max(next_signal_at, now + POST_SERIES_COOLDOWN_SEC)
+        next_signal_at = now + 2
         maybe_send_daily_summary(now)
         return
     record_signal_result(signal)
@@ -1176,12 +1027,7 @@ def deliver_terminal_result(signal: dict[str, Any], now: float) -> bool:
         if pending_signal is signal:
             pending_signal = None
     persist_signal_state()
-    cooldown = (
-        POST_LOSS_COOLDOWN_SEC
-        if signal.get("result") == "LOSS"
-        else POST_SERIES_COOLDOWN_SEC
-    )
-    next_signal_at = max(next_signal_at, now + cooldown)
+    next_signal_at = now + 2
     maybe_send_daily_summary(now)
     return True
 
@@ -1259,9 +1105,6 @@ def signal_loop() -> None:
         maybe_send_daily_summary(now)
         if not in_signal_window():
             continue
-        if daily_signal_limit_reached(now):
-            search_started_at = 0.0
-            continue
         if market_pause_until:
             if monitor_market_pause(now):
                 search_started_at = 0.0
@@ -1297,8 +1140,6 @@ def signal_loop() -> None:
                 next_signal_at = max(now + 5, time.time() + (gemini_next_request_at - time.monotonic()))
             continue
         search_started_at = 0.0
-        if not reserve_daily_signal_slot(now):
-            continue
         candidate = schedule_signal_entry(candidate)
         with signal_state_lock:
             if active_signal is not None or pending_signal is not None:
@@ -1355,9 +1196,6 @@ CORS(app)
 def health():
     latest = max(price_times.values(), default=0)
     pause_remaining = max(0, round(market_pause_until - time.time()))
-    roll_daily_counters()
-    with daily_stats_lock:
-        signal_count_today = daily_signal_count
     with signal_state_lock:
         if active_signal is not None:
             series_state = "active"
@@ -1382,11 +1220,6 @@ def health():
         "final_result_delivery_mode": FINAL_RESULT_DELIVERY_MODE,
         "series_state": series_state,
         "series_pair": series_pair,
-        "daily_signal_count": signal_count_today,
-        "daily_signal_limit": MAX_DAILY_SIGNALS,
-        "daily_signals_remaining": max(0, MAX_DAILY_SIGNALS - signal_count_today),
-        "min_signal_confidence": MIN_SIGNAL_CONFIDENCE,
-        "min_signal_quality": MIN_SIGNAL_QUALITY,
         "error": last_error,
     })
 
@@ -1408,36 +1241,17 @@ def signal():
             "error": "Сигнал уже активний, очікує входу або виконується пошук",
             "status": "in_progress",
         }), 409
-    now = time.time()
-    if daily_signal_limit_reached(now):
-        return jsonify({
-            "error": f"Денний ліміт сигналів {MAX_DAILY_SIGNALS} вже досягнуто",
-            "daily_signal_limit": MAX_DAILY_SIGNALS,
-        }), 429
-    if now < next_signal_at:
-        return jsonify({
-            "error": "Після попередньої серії ще діє перерва для повторної перевірки ринку",
-            "retry_after_sec": max(1, round(next_signal_at - now)),
-        }), 429
     best = generate_best_signal()
     if best is None:
         return jsonify({
             "error": f"Немає доступного сигналу з підтвердженою виплатою ≥ {MIN_PAYOUT:g}%",
             "min_payout": MIN_PAYOUT,
         }), 503
-    if not reserve_daily_signal_slot(now):
-        return jsonify({
-            "error": f"Денний ліміт сигналів {MAX_DAILY_SIGNALS} вже досягнуто",
-            "daily_signal_limit": MAX_DAILY_SIGNALS,
-        }), 429
     response = {
         **best,
         "status": "ready",
         "min_payout": MIN_PAYOUT,
-        "message": (
-            "Сигнал обрано лише після перевірки виплати, "
-            f"confidence ≥ {MIN_SIGNAL_CONFIDENCE}% та якості руху ≥ {MIN_SIGNAL_QUALITY}%."
-        ),
+        "message": "Сигнал обрано лише серед пар із підтвердженою виплатою.",
     }
     response.pop("image_base64", None)
     return jsonify(response)
@@ -1447,6 +1261,8 @@ def main() -> None:
     log.info("RADIK AI BOT: пар ≥ %.2f%%, всего OTC-пар %s", MIN_PAYOUT, len(OTC_PAIRS))
     restore_signal_state()
     connect()
+    if active_signal is None and pending_signal is None:
+        start_startup_safety_pause(time.time())
     global signal_thread
     signal_thread = threading.Thread(target=signal_loop, name="signal-scheduler", daemon=True)
     signal_thread.start()

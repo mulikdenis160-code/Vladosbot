@@ -4,12 +4,10 @@ description: Final-result and recovery-pause rules for losing signal series.
 ---
 
 A signal series may make up to three attempts. The first two failed attempts are
-eligible for overlays, but an overlay is opened only after a fresh snapshot and
-Gemini analysis confirm the same direction above the recovery threshold. If that
-confirmation fails, the actual loss is reported and the series ends without an
-extra entry. A third failed attempt still triggers the market pause. At the end
-of each pause period, resume only after a fresh market check confirms
-directional movement; otherwise extend the pause.
+communicated as overlays, not final losses; only the third failed attempt is a
+final LOSS. A final three-attempt loss pauses new signal series for at least
+30 minutes. At the end of each pause period, resume only after a fresh market
+check confirms directional movement; otherwise extend the pause.
 
 **Why:** The bot must not present recoverable attempts as terminal failures or
 continue searching through a flat or unstable market after a fully failed
@@ -18,9 +16,7 @@ series.
 **How to apply:** Any changes to signal-state transitions, Telegram result
 messages, daily statistics, or restart behavior must preserve the distinction
 between an overlay attempt and a final series result. Never resume the pause
-from stale or earlier market observations. Quality-first defaults are a maximum
-of 50 announced series per Kyiv day, confidence at least 80%, quality at least
-72%, a 10-minute post-series cooldown, and a 15-minute cooldown after a loss.
+from stale or earlier market observations.
 
 An announced or pending signal remains the sole series owner until a terminal
 result is sent. A missing entry quote must resolve as UNKNOWN, not clear the
@@ -59,6 +55,5 @@ favorable sample never releases the pause.
 **Why:** One pair can look healthy while the broader OTC market remains
 unstable, which made a one-sample pause decision inconsistent.
 
-**How to apply:** A normal production restart must not create a Telegram pause;
-only a real third-failure market pause may do that. Only the production VM may
-send Telegram signals; never run a local bot beside it.
+**How to apply:** Production restarts begin with a neutral safety pause, and
+only the production VM may send Telegram signals; never run a local bot beside it.
