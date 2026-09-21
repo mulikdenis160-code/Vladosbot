@@ -49,6 +49,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             "market_snapshot": bot.market_snapshot,
             "persist_signal_state": bot.persist_signal_state,
             "telegram_request": bot.telegram_request,
+            "telegram_chat_id": bot.TELEGRAM_CHAT_ID,
         }
         bot.active_signal = None
         bot.pending_signal = None
@@ -63,6 +64,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.market_pause_pairs = []
         bot.market_pause_recovery_seen = False
         bot.persist_signal_state = lambda: None
+        bot.TELEGRAM_CHAT_ID = "test-chat"
 
     def tearDown(self):
         bot.active_signal = self.saved["active_signal"]
@@ -91,6 +93,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.market_snapshot = self.saved["market_snapshot"]
         bot.persist_signal_state = self.saved["persist_signal_state"]
         bot.telegram_request = self.saved["telegram_request"]
+        bot.TELEGRAM_CHAT_ID = self.saved["telegram_chat_id"]
 
     def test_two_losses_become_overlays_then_third_is_final_loss(self):
         overlays, finals, recorded, pauses = [], [], [], []
@@ -309,6 +312,21 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         self.assertEqual([request[0] for request in requests], ["/send-photo", "/send-message"])
         self.assertIn("✅ ВИГРАШ", requests[1][1]["text"])
+
+    def test_signal_falls_back_to_text_when_signal_image_fails(self):
+        requests = []
+
+        def request(path, payload):
+            requests.append((path, payload))
+            if path == "/send-photo":
+                raise ConnectionError("photo unavailable")
+            return {"ok": True, "message_id": 125}
+
+        bot.telegram_request = request
+        bot.send_signal_to_telegram(signal(0))
+
+        self.assertEqual([request[0] for request in requests], ["/send-photo", "/send-message"])
+        self.assertIn("📊 СИГНАЛ", requests[1][1]["text"])
 
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []

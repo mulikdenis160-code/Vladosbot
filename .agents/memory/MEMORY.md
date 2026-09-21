@@ -3,3 +3,4 @@
 - [Pocket Option price freshness](pocket-option-live-prices.md) — refresh pair history for entry and expiry; stale cached ticks must never trigger overlays.
 - [Market pause policy](market-pause-policy.md) — only third failed attempt is final; resume paused signals only after a fresh recovery check.
 - [PocketOptionAPI native crash](pocket-option-native-crash.md) — serialize all `api` calls behind one lock; production run command must auto-restart on process exit.
+- [Telegram media fallback](telegram-media-fallback.md) — Replit's Telegram proxy may reject multipart photos; every user-visible signal needs a text fallback.
