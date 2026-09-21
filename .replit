@@ -41,3 +41,4 @@ MARKET_PAUSE_SEC = "1200"
 
 [userenv.production]
 STARTUP_SAFETY_PAUSE_SEC = "0"
+TELEGRAM_PUBLIC_BASE_URL = "https://lumpy-shimmering-element.replit.app"

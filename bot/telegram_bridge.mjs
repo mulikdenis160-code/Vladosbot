@@ -46,6 +46,18 @@ const server = http.createServer(async (request, response) => {
       return send(response, 200, { ok: true, message_id: result.message_id });
     }
     if (request.method === "POST" && request.url === "/send-photo") {
+      if (body.image_url) {
+        const result = await telegram("/sendPhoto", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            chat_id: process.env.TELEGRAM_CHAT_ID,
+            caption: body.caption || "",
+            photo: body.image_url,
+          }),
+        });
+        return send(response, 200, { ok: true, message_id: result.message_id });
+      }
       const bytes = Buffer.from(body.image_base64 || "", "base64");
       if (!bytes.length) throw new Error("image_base64 is required");
       const form = new FormData();

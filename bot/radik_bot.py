@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
 load_dotenv()
@@ -69,6 +69,7 @@ MARKET_RECOVERY_MIN_MOVE_PCT = float(
 )
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 TELEGRAM_BRIDGE_URL = os.getenv("TELEGRAM_BRIDGE_URL", "http://127.0.0.1:8010").rstrip("/")
+TELEGRAM_PUBLIC_BASE_URL = os.getenv("TELEGRAM_PUBLIC_BASE_URL", "").rstrip("/")
 SIGNAL_TIMEZONE = os.getenv("SIGNAL_TIMEZONE", "Europe/Kyiv")
 SIGNAL_START = clock_time.fromisoformat(os.getenv("SIGNAL_START_HOUR", "09:00"))
 SIGNAL_END = clock_time.fromisoformat(os.getenv("SIGNAL_END_HOUR", "23:00"))
@@ -525,6 +526,12 @@ def asset_base64(kind: str) -> str:
     return base64.b64encode(path.read_bytes()).decode("ascii")
 
 
+def telegram_image_url(kind: str) -> str:
+    if kind not in TELEGRAM_IMAGES or not TELEGRAM_PUBLIC_BASE_URL:
+        return ""
+    return f"{TELEGRAM_PUBLIC_BASE_URL}/api/telegram-image/{kind}"
+
+
 def send_signal_to_telegram(
     signal: dict[str, Any], caption_prefix: str = "", image_kind: str = "signal"
 ) -> None:
@@ -551,6 +558,20 @@ def send_signal_to_telegram(
         f"🎯 Впевненість: {signal['confidence']}%\n\n"
         f"📝 {signal['reason']}"
     )
+    image_url = telegram_image_url(image_kind)
+    if image_url:
+        try:
+            telegram_request("/send-photo", {
+                "image_url": image_url,
+                "caption": text,
+                "filename": f"{image_kind}.jpg",
+            })
+            return
+        except Exception as exc:
+            log.warning(
+                "Не вдалося надіслати зображення сигналу %s (%s), пробую текст",
+                signal["pair"], type(exc).__name__,
+            )
     telegram_request("/send-message", {"text": text})
 
 
@@ -558,6 +579,20 @@ def send_search_to_telegram() -> None:
     if not TELEGRAM_CHAT_ID:
         return
     text = "🔎 ПОШУК СИГНАЛУ\n\nАналізую ринок до 3 хвилин та чекаю на якісний сетап."
+    image_url = telegram_image_url("search")
+    if image_url:
+        try:
+            telegram_request("/send-photo", {
+                "image_url": image_url,
+                "caption": text,
+                "filename": "search.jpg",
+            })
+            return
+        except Exception as exc:
+            log.warning(
+                "Не вдалося надіслати зображення пошуку (%s), пробую текст",
+                type(exc).__name__,
+            )
     telegram_request("/send-message", {"text": text})
 
 
@@ -587,7 +622,23 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
         f"Ціна закриття: {signal.get('close_price', 'немає даних')}\n"
         f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
     )
-    delivery = telegram_request("/send-message", {"text": text})
+    image_kind = {"WIN": "win", "LOSS": "loss"}.get(signal.get("result"))
+    image_url = telegram_image_url(image_kind) if image_kind else ""
+    if image_url:
+        try:
+            delivery = telegram_request("/send-photo", {
+                "image_url": image_url,
+                "caption": text,
+                "filename": f"{image_kind}.jpg",
+            })
+        except Exception as exc:
+            log.warning(
+                "Не вдалося надіслати картинку результату %s (%s), пробую текст",
+                signal["pair"], type(exc).__name__,
+            )
+            delivery = telegram_request("/send-message", {"text": text})
+    else:
+        delivery = telegram_request("/send-message", {"text": text})
     log.info(
         "Фінальний результат %s підтверджено Telegram message_id=%s",
         signal["pair"], delivery.get("message_id", "невідомо"),
@@ -608,6 +659,20 @@ def send_daily_summary_to_telegram(summary_date: str, stats: dict[str, int]) -> 
         f"⚠️ Не визначено: {stats['UNKNOWN']}\n\n"
         f"Баланс результатів: {net_label}"
     )
+    image_url = telegram_image_url("summary")
+    if image_url:
+        try:
+            telegram_request("/send-photo", {
+                "image_url": image_url,
+                "caption": text,
+                "filename": "daily-summary.jpg",
+            })
+            return
+        except Exception as exc:
+            log.warning(
+                "Не вдалося надіслати зображення підсумку (%s), пробую текст",
+                type(exc).__name__,
+            )
     telegram_request("/send-message", {"text": text})
 
 
@@ -1218,6 +1283,14 @@ def connect() -> bool:
 
 app = Flask(__name__)
 CORS(app)
+
+
+@app.get("/api/telegram-image/<kind>")
+def telegram_image(kind: str):
+    path = TELEGRAM_IMAGES.get(kind)
+    if not path or not path.exists():
+        return jsonify({"error": "Image not found"}), 404
+    return send_file(path, mimetype="image/jpeg", max_age=3600)
 
 
 @app.get("/health")

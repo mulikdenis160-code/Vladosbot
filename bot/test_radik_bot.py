@@ -50,6 +50,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             "persist_signal_state": bot.persist_signal_state,
             "telegram_request": bot.telegram_request,
             "telegram_chat_id": bot.TELEGRAM_CHAT_ID,
+            "telegram_public_base_url": bot.TELEGRAM_PUBLIC_BASE_URL,
         }
         bot.active_signal = None
         bot.pending_signal = None
@@ -65,6 +66,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.market_pause_recovery_seen = False
         bot.persist_signal_state = lambda: None
         bot.TELEGRAM_CHAT_ID = "test-chat"
+        bot.TELEGRAM_PUBLIC_BASE_URL = "https://example.test"
 
     def tearDown(self):
         bot.active_signal = self.saved["active_signal"]
@@ -94,6 +96,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.persist_signal_state = self.saved["persist_signal_state"]
         bot.telegram_request = self.saved["telegram_request"]
         bot.TELEGRAM_CHAT_ID = self.saved["telegram_chat_id"]
+        bot.TELEGRAM_PUBLIC_BASE_URL = self.saved["telegram_public_base_url"]
 
     def test_two_losses_become_overlays_then_third_is_final_loss(self):
         overlays, finals, recorded, pauses = [], [], [], []
@@ -281,7 +284,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(bot.pending_result_deliveries, [])
         self.assertIsNone(bot.result_delivery_last_error)
 
-    def test_result_uses_text_message_without_photo(self):
+    def test_result_uses_public_photo_url(self):
         requests = []
         bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
             "ok": True, "message_id": 123,
@@ -291,14 +294,20 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         bot.send_result_to_telegram(current)
 
-        self.assertEqual([request[0] for request in requests], ["/send-message"])
-        self.assertIn("✅ ВИГРАШ", requests[0][1]["text"])
+        self.assertEqual([request[0] for request in requests], ["/send-photo"])
+        self.assertIn("✅ ВИГРАШ", requests[0][1]["caption"])
+        self.assertEqual(
+            requests[0][1]["image_url"],
+            "https://example.test/api/telegram-image/win",
+        )
 
-    def test_result_does_not_attempt_photo_upload(self):
+    def test_result_falls_back_to_text_when_public_photo_fails(self):
         requests = []
 
         def request(path, payload):
             requests.append((path, payload))
+            if path == "/send-photo":
+                raise ConnectionError("photo unavailable")
             return {"ok": True, "message_id": 124}
 
         bot.telegram_request = request
@@ -307,10 +316,10 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         bot.send_result_to_telegram(current)
 
-        self.assertEqual([request[0] for request in requests], ["/send-message"])
-        self.assertIn("✅ ВИГРАШ", requests[0][1]["text"])
+        self.assertEqual([request[0] for request in requests], ["/send-photo", "/send-message"])
+        self.assertIn("✅ ВИГРАШ", requests[1][1]["text"])
 
-    def test_signal_uses_text_message_without_photo(self):
+    def test_signal_uses_public_photo_url(self):
         requests = []
 
         def request(path, payload):
@@ -320,8 +329,12 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.telegram_request = request
         bot.send_signal_to_telegram(signal(0))
 
-        self.assertEqual([request[0] for request in requests], ["/send-message"])
-        self.assertIn("📊 СИГНАЛ", requests[0][1]["text"])
+        self.assertEqual([request[0] for request in requests], ["/send-photo"])
+        self.assertIn("📊 СИГНАЛ", requests[0][1]["caption"])
+        self.assertEqual(
+            requests[0][1]["image_url"],
+            "https://example.test/api/telegram-image/signal",
+        )
 
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []
