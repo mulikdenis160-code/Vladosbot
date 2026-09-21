@@ -173,6 +173,10 @@ signal_thread: Optional[threading.Thread] = None
 daily_stats_date = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
 daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
 daily_summary_sent_date: Optional[str] = None
+pending_result_deliveries: list[dict[str, Any]] = []
+result_delivery_next_retry_at = 0.0
+result_delivery_last_error: Optional[str] = None
+RESULT_DELIVERY_RETRY_SEC = 60
 
 
 def persist_signal_state() -> None:
@@ -180,10 +184,15 @@ def persist_signal_state() -> None:
         payload = {
             "active_signal": active_signal,
             "pending_signal": pending_signal,
+            "pending_result_deliveries": pending_result_deliveries,
             "saved_at": time.time(),
         }
     try:
-        if not payload["active_signal"] and not payload["pending_signal"]:
+        if (
+            not payload["active_signal"]
+            and not payload["pending_signal"]
+            and not payload["pending_result_deliveries"]
+        ):
             SIGNAL_STATE_FILE.unlink(missing_ok=True)
             return
         SIGNAL_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -195,7 +204,7 @@ def persist_signal_state() -> None:
 
 
 def restore_signal_state() -> None:
-    global active_signal, pending_signal
+    global active_signal, pending_signal, pending_result_deliveries
     try:
         payload = json.loads(SIGNAL_STATE_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -209,14 +218,27 @@ def restore_signal_state() -> None:
         active = None
     if not isinstance(pending, dict):
         pending = None
+    queued = payload.get("pending_result_deliveries") or []
+    if not isinstance(queued, list):
+        queued = []
+    queued = [item for item in queued if isinstance(item, dict)]
+    if active and active.get("result_delivery_pending"):
+        queued.insert(0, active)
+        active = None
     with signal_state_lock:
         active_signal = active
         pending_signal = pending
+        pending_result_deliveries = queued
     if active or pending:
         restored = active or pending
         log.warning(
             "Відновлено незавершену серію %s після перезапуску; новий пошук заблоковано",
             restored.get("pair", "невідома пара"),
+        )
+    if queued:
+        log.warning(
+            "Відновлено %s результатів, які очікують доставки в Telegram",
+            len(queued),
         )
 market_pause_until = 0.0
 market_pause_started_at = 0.0
@@ -1002,21 +1024,64 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
     deliver_terminal_result(signal, now)
 
 
+def queue_result_delivery(signal: dict[str, Any], now: float, error: Exception) -> None:
+    global active_signal, pending_signal, pending_result_deliveries
+    global result_delivery_next_retry_at, result_delivery_last_error
+    signal["result_delivery_pending"] = True
+    signal["result_delivery_attempts"] = int(signal.get("result_delivery_attempts", 0)) + 1
+    with signal_state_lock:
+        if active_signal is signal:
+            active_signal = None
+        if pending_signal is signal:
+            pending_signal = None
+        pending_result_deliveries.append(signal)
+    result_delivery_last_error = type(error).__name__
+    result_delivery_next_retry_at = now + RESULT_DELIVERY_RETRY_SEC
+    persist_signal_state()
+
+
+def retry_result_deliveries(now: float) -> None:
+    global pending_result_deliveries, result_delivery_next_retry_at
+    global result_delivery_last_error
+    if not pending_result_deliveries or now < result_delivery_next_retry_at:
+        return
+    signal = pending_result_deliveries[0]
+    try:
+        send_result_to_telegram(signal)
+    except Exception as exc:
+        attempts = int(signal.get("result_delivery_attempts", 1))
+        delay = min(5 * 60, RESULT_DELIVERY_RETRY_SEC * (2 ** min(attempts - 1, 3)))
+        signal["result_delivery_attempts"] = attempts + 1
+        result_delivery_last_error = type(exc).__name__
+        result_delivery_next_retry_at = now + delay
+        persist_signal_state()
+        log.warning(
+            "Не вдалося доставити відкладений результат %s (%s); "
+            "нова спроба через %ss",
+            signal.get("pair", "невідома пара"), type(exc).__name__, delay,
+        )
+        return
+    pending_result_deliveries.pop(0)
+    signal.pop("result_delivery_pending", None)
+    result_delivery_last_error = None
+    result_delivery_next_retry_at = now + RESULT_DELIVERY_RETRY_SEC if pending_result_deliveries else 0.0
+    persist_signal_state()
+    log.info(
+        "Відкладений результат %s доставлено в Telegram",
+        signal.get("pair", "невідома пара"),
+    )
+
+
 def deliver_terminal_result(signal: dict[str, Any], now: float) -> bool:
     global active_signal, pending_signal, next_signal_at
     try:
         send_result_to_telegram(signal)
     except Exception as exc:
-        signal["result_delivery_pending"] = True
-        with signal_state_lock:
-            active_signal = signal
-            if pending_signal is signal:
-                pending_signal = None
-        persist_signal_state()
-        next_signal_at = now + 5
+        queue_result_delivery(signal, now, exc)
+        next_signal_at = now + 2
         log.warning(
             "Фінальний результат %s не доставлено в Telegram (%s); "
-            "серія залишається заблокованою, повтор через 5с",
+            "результат поставлено в чергу, пошук нової серії продовжиться",
             signal["pair"], type(exc).__name__,
         )
         return False
@@ -1050,14 +1115,12 @@ def finalize_pending_signal(
 def signal_loop() -> None:
     global active_signal, pending_signal, next_signal_at, search_started_at
     while not signal_stop.wait(1):
+        now = time.time()
+        retry_result_deliveries(now)
         if not connected:
             continue
-        now = time.time()
         with signal_state_lock:
             current = active_signal
-        if current and current.get("result_delivery_pending"):
-            deliver_terminal_result(current, now)
-            continue
         if current and now >= current["expires_at"]:
             outcome = evaluate_signal(current)
             handle_signal_outcome(current, outcome, now)
