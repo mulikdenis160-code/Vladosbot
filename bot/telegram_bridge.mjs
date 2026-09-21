@@ -3,12 +3,23 @@ import { ReplitConnectors } from "@replit/connectors-sdk";
 
 const port = Number(process.env.TELEGRAM_BRIDGE_PORT || 8010);
 const connectors = new ReplitConnectors();
+const botToken = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
 
 async function telegram(path, options = {}) {
-  const response = await connectors.proxy("telegram", path, options);
-  const body = await response.json();
+  const response = botToken
+    ? await fetch(`https://api.telegram.org/bot${botToken}${path}`, options)
+    : await connectors.proxy("telegram", path, options);
+  const raw = await response.text();
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    throw new Error(`Telegram returned non-JSON HTTP ${response.status}`);
+  }
   if (!response.ok || !body.ok) {
-    throw new Error(body.description || `Telegram request failed (${response.status})`);
+    throw new Error(
+      body.description || body.error || `Telegram request failed (${response.status})`,
+    );
   }
   return body.result;
 }
