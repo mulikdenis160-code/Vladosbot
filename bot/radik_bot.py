@@ -553,11 +553,18 @@ def send_signal_to_telegram(
     )
     image = asset_base64(image_kind) or signal.get("image_base64", "")
     if image:
-        telegram_request("/send-photo", {
-            "image_base64": image,
-            "caption": text,
-            "filename": f"{image_kind}.jpg",
-        })
+        try:
+            telegram_request("/send-photo", {
+                "image_base64": image,
+                "caption": text,
+                "filename": f"{image_kind}.jpg",
+            })
+        except Exception as exc:
+            log.warning(
+                "Не вдалося надіслати зображення сигналу %s (%s), пробую текст",
+                signal["pair"], type(exc).__name__,
+            )
+            telegram_request("/send-message", {"text": text})
     else:
         telegram_request("/send-message", {"text": text})
 
@@ -565,11 +572,23 @@ def send_signal_to_telegram(
 def send_search_to_telegram() -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    telegram_request("/send-photo", {
-        "image_base64": asset_base64("search"),
-        "caption": "🔎 ПОШУК СИГНАЛУ\n\nАналізую ринок до 3 хвилин та чекаю на якісний сетап.",
-        "filename": "search.jpg",
-    })
+    text = "🔎 ПОШУК СИГНАЛУ\n\nАналізую ринок до 3 хвилин та чекаю на якісний сетап."
+    image = asset_base64("search")
+    if image:
+        try:
+            telegram_request("/send-photo", {
+                "image_base64": image,
+                "caption": text,
+                "filename": "search.jpg",
+            })
+        except Exception as exc:
+            log.warning(
+                "Не вдалося надіслати зображення пошуку (%s), пробую текст",
+                type(exc).__name__,
+            )
+            telegram_request("/send-message", {"text": text})
+    else:
+        telegram_request("/send-message", {"text": text})
 
 
 def send_search_finished_to_telegram() -> None:
