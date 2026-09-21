@@ -81,7 +81,7 @@ TELEGRAM_IMAGES = {
     "win": ASSET_DIR / "win.jpg",
     "loss": ASSET_DIR / "loss.jpg",
 }
-FINAL_RESULT_DELIVERY_MODE = "photo-for-win-loss-with-text-fallback"
+FINAL_RESULT_DELIVERY_MODE = "text-only"
 SIGNAL_STATE_FILE = Path(
     os.getenv("RADIK_SIGNAL_STATE_FILE", "/tmp/radik-signal-state.json")
 )
@@ -551,44 +551,14 @@ def send_signal_to_telegram(
         f"🎯 Впевненість: {signal['confidence']}%\n\n"
         f"📝 {signal['reason']}"
     )
-    image = asset_base64(image_kind) or signal.get("image_base64", "")
-    if image:
-        try:
-            telegram_request("/send-photo", {
-                "image_base64": image,
-                "caption": text,
-                "filename": f"{image_kind}.jpg",
-            })
-        except Exception as exc:
-            log.warning(
-                "Не вдалося надіслати зображення сигналу %s (%s), пробую текст",
-                signal["pair"], type(exc).__name__,
-            )
-            telegram_request("/send-message", {"text": text})
-    else:
-        telegram_request("/send-message", {"text": text})
+    telegram_request("/send-message", {"text": text})
 
 
 def send_search_to_telegram() -> None:
     if not TELEGRAM_CHAT_ID:
         return
     text = "🔎 ПОШУК СИГНАЛУ\n\nАналізую ринок до 3 хвилин та чекаю на якісний сетап."
-    image = asset_base64("search")
-    if image:
-        try:
-            telegram_request("/send-photo", {
-                "image_base64": image,
-                "caption": text,
-                "filename": "search.jpg",
-            })
-        except Exception as exc:
-            log.warning(
-                "Не вдалося надіслати зображення пошуку (%s), пробую текст",
-                type(exc).__name__,
-            )
-            telegram_request("/send-message", {"text": text})
-    else:
-        telegram_request("/send-message", {"text": text})
+    telegram_request("/send-message", {"text": text})
 
 
 def send_search_finished_to_telegram() -> None:
@@ -617,25 +587,7 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
         f"Ціна закриття: {signal.get('close_price', 'немає даних')}\n"
         f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
     )
-    image_kind = {"WIN": "win", "LOSS": "loss"}.get(signal.get("result"))
-    image = asset_base64(image_kind) if image_kind else ""
-    try:
-        if image:
-            delivery = telegram_request("/send-photo", {
-                "image_base64": image,
-                "caption": text,
-                "filename": f"{image_kind}.jpg",
-            })
-        else:
-            delivery = telegram_request("/send-message", {"text": text})
-    except Exception as exc:
-        if not image:
-            raise
-        log.warning(
-            "Не вдалося надіслати картинку результату %s (%s), пробую текст",
-            signal["pair"], type(exc).__name__,
-        )
-        delivery = telegram_request("/send-message", {"text": text})
+    delivery = telegram_request("/send-message", {"text": text})
     log.info(
         "Фінальний результат %s підтверджено Telegram message_id=%s",
         signal["pair"], delivery.get("message_id", "невідомо"),
@@ -656,11 +608,7 @@ def send_daily_summary_to_telegram(summary_date: str, stats: dict[str, int]) -> 
         f"⚠️ Не визначено: {stats['UNKNOWN']}\n\n"
         f"Баланс результатів: {net_label}"
     )
-    telegram_request("/send-photo", {
-        "image_base64": asset_base64("summary"),
-        "caption": text,
-        "filename": "daily-summary.jpg",
-    })
+    telegram_request("/send-message", {"text": text})
 
 
 def maybe_send_daily_summary(now: float) -> None:

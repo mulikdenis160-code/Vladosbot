@@ -281,7 +281,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(bot.pending_result_deliveries, [])
         self.assertIsNone(bot.result_delivery_last_error)
 
-    def test_result_requires_confirmed_text_message(self):
+    def test_result_uses_text_message_without_photo(self):
         requests = []
         bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
             "ok": True, "message_id": 123,
@@ -291,17 +291,14 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         bot.send_result_to_telegram(current)
 
-        self.assertEqual([request[0] for request in requests], ["/send-photo"])
-        self.assertIn("✅ ВИГРАШ", requests[0][1]["caption"])
-        self.assertTrue(requests[0][1]["image_base64"])
+        self.assertEqual([request[0] for request in requests], ["/send-message"])
+        self.assertIn("✅ ВИГРАШ", requests[0][1]["text"])
 
-    def test_result_falls_back_to_text_when_result_image_fails(self):
+    def test_result_does_not_attempt_photo_upload(self):
         requests = []
 
         def request(path, payload):
             requests.append((path, payload))
-            if path == "/send-photo":
-                raise ConnectionError("photo unavailable")
             return {"ok": True, "message_id": 124}
 
         bot.telegram_request = request
@@ -310,23 +307,21 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         bot.send_result_to_telegram(current)
 
-        self.assertEqual([request[0] for request in requests], ["/send-photo", "/send-message"])
-        self.assertIn("✅ ВИГРАШ", requests[1][1]["text"])
+        self.assertEqual([request[0] for request in requests], ["/send-message"])
+        self.assertIn("✅ ВИГРАШ", requests[0][1]["text"])
 
-    def test_signal_falls_back_to_text_when_signal_image_fails(self):
+    def test_signal_uses_text_message_without_photo(self):
         requests = []
 
         def request(path, payload):
             requests.append((path, payload))
-            if path == "/send-photo":
-                raise ConnectionError("photo unavailable")
             return {"ok": True, "message_id": 125}
 
         bot.telegram_request = request
         bot.send_signal_to_telegram(signal(0))
 
-        self.assertEqual([request[0] for request in requests], ["/send-photo", "/send-message"])
-        self.assertIn("📊 СИГНАЛ", requests[1][1]["text"])
+        self.assertEqual([request[0] for request in requests], ["/send-message"])
+        self.assertIn("📊 СИГНАЛ", requests[0][1]["text"])
 
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []
