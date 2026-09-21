@@ -28,15 +28,19 @@ signal even though the first series has not been resolved.
 **How to apply:** Treat pending entry failures and missed entry windows as
 terminal non-loss outcomes before allowing the scheduler to search again.
 
-Final-result delivery is part of completing a series: a transient Telegram
-delivery failure must retain the series lock and retry the result, never release
-the scheduler.
+Final-result delivery is retried independently from signal scheduling: a
+Telegram delivery failure must persist the result in a queue, release the
+series lock, and let the scheduler continue. The queued result is retried with
+backoff until delivery succeeds.
 
-**Why:** A result that exists only in process state is not visible to the user;
-releasing the lock first creates a new signal with no observable outcome.
+**Why:** A Telegram outage must not stop market monitoring and new signal
+searches indefinitely. Persisting the result before releasing the lock avoids
+losing the outcome while preventing one failed notification from blocking the
+bot.
 
-**How to apply:** Clear the active or pending series only after the terminal
-message has been successfully delivered.
+**How to apply:** Persist the terminal result and enqueue it when delivery
+fails; clear the active or pending series immediately. Keep queued results
+visible in health state and retry them independently.
 
 Terminal outcomes use a canonical Telegram text message with a confirmed
 message identifier; image captions are optional presentation, never proof that

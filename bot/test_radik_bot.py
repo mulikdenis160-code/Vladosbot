@@ -25,6 +25,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.saved = {
             "active_signal": bot.active_signal,
             "pending_signal": bot.pending_signal,
+            "pending_result_deliveries": list(bot.pending_result_deliveries),
+            "result_delivery_next_retry_at": bot.result_delivery_next_retry_at,
+            "result_delivery_last_error": bot.result_delivery_last_error,
             "signal_searching": bot.signal_searching,
             "next_signal_at": bot.next_signal_at,
             "pause_until": bot.market_pause_until,
@@ -49,6 +52,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         }
         bot.active_signal = None
         bot.pending_signal = None
+        bot.pending_result_deliveries = []
+        bot.result_delivery_next_retry_at = 0
+        bot.result_delivery_last_error = None
         bot.signal_searching = False
         bot.market_pause_until = 0
         bot.market_pause_started_at = 0
@@ -61,6 +67,9 @@ class OverlayAndPauseTests(unittest.TestCase):
     def tearDown(self):
         bot.active_signal = self.saved["active_signal"]
         bot.pending_signal = self.saved["pending_signal"]
+        bot.pending_result_deliveries = self.saved["pending_result_deliveries"]
+        bot.result_delivery_next_retry_at = self.saved["result_delivery_next_retry_at"]
+        bot.result_delivery_last_error = self.saved["result_delivery_last_error"]
         bot.signal_searching = self.saved["signal_searching"]
         bot.next_signal_at = self.saved["next_signal_at"]
         bot.market_pause_until = self.saved["pause_until"]
@@ -244,7 +253,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(recorded[0]["result"], "UNKNOWN")
         self.assertIsNone(bot.pending_signal)
 
-    def test_failed_terminal_message_keeps_signal_locked_until_delivery(self):
+    def test_failed_terminal_message_is_queued_without_blocking_new_search(self):
         current = signal(2)
         current["result"] = "WIN"
         sent, recorded = [], []
@@ -258,14 +267,16 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.handle_signal_outcome(current, "WIN", 100)
 
         self.assertEqual(len(recorded), 1)
-        self.assertIs(bot.active_signal, current)
+        self.assertIsNone(bot.active_signal)
         self.assertTrue(current["result_delivery_pending"])
-        self.assertTrue(bot.signal_is_in_progress())
+        self.assertEqual(len(bot.pending_result_deliveries), 1)
+        self.assertFalse(bot.signal_is_in_progress())
 
         bot.send_result_to_telegram = lambda value: sent.append(deepcopy(value))
-        self.assertTrue(bot.deliver_terminal_result(current, 105))
+        bot.retry_result_deliveries(160)
         self.assertEqual([item["result"] for item in sent], ["WIN"])
-        self.assertIsNone(bot.active_signal)
+        self.assertEqual(bot.pending_result_deliveries, [])
+        self.assertIsNone(bot.result_delivery_last_error)
 
     def test_result_requires_confirmed_text_message(self):
         requests = []
