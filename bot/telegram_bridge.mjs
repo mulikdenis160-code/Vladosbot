@@ -1,14 +1,20 @@
 import http from "node:http";
-import { ReplitConnectors } from "@replit/connectors-sdk";
 
 const port = Number(process.env.TELEGRAM_BRIDGE_PORT || 8010);
-const connectors = new ReplitConnectors();
 const botToken = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+let connectors;
 
 async function telegram(path, options = {}) {
-  const response = botToken
-    ? await fetch(`https://api.telegram.org/bot${botToken}${path}`, options)
-    : await connectors.proxy("telegram", path, options);
+  let response;
+  if (botToken) {
+    response = await fetch(`https://api.telegram.org/bot${botToken}${path}`, options);
+  } else {
+    if (!connectors) {
+      const { ReplitConnectors } = await import("@replit/connectors-sdk");
+      connectors = new ReplitConnectors();
+    }
+    response = await connectors.proxy("telegram", path, options);
+  }
   const raw = await response.text();
   let body;
   try {
