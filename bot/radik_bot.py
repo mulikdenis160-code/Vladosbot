@@ -1385,7 +1385,7 @@ This is the service core extracted from the source repository. It deliberately
 does not contain a web UI and never returns the SSID or Gemini key.
 """
 
-from __future__ import annotations
+# Redundant copy of the module; the future import already appears at file start.
 
 import json
 import logging
