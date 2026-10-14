@@ -116,8 +116,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(overlays[0][1], "🔁 ПЕРЕКРИТТЯ 1/2\n")
         self.assertEqual(overlays[0][2], "overlay")
         self.assertEqual(len(finals), 0)
-        self.assertEqual(len(recorded), 0)
+        self.assertEqual([item["result"] for item in recorded], ["LOSS"])
         self.assertEqual(bot.pending_signal["attempt"], 1)
+        self.assertFalse(bot.pending_signal.get("result_recorded", False))
 
         second = signal(1)
         bot.active_signal, bot.pending_signal = second, None
@@ -125,7 +126,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(len(overlays), 2)
         self.assertEqual(overlays[1][1], "🔁 ПЕРЕКРИТТЯ 2/2\n")
         self.assertEqual(len(finals), 0)
-        self.assertEqual(len(recorded), 0)
+        self.assertEqual([item["result"] for item in recorded], ["LOSS", "LOSS"])
         self.assertEqual(bot.pending_signal["attempt"], 2)
 
         third = signal(2)
@@ -133,7 +134,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.handle_signal_outcome(third, "LOSS", 300)
         self.assertEqual(len(finals), 1)
         self.assertEqual(finals[0]["result"], "LOSS")
-        self.assertEqual(len(recorded), 1)
+        self.assertEqual([item["result"] for item in recorded], ["LOSS", "LOSS", "LOSS"])
         self.assertEqual(len(pauses), 1)
         self.assertIsNone(bot.active_signal)
 
@@ -240,9 +241,29 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.handle_signal_outcome(current, "LOSS", 100)
 
         self.assertEqual(finals, [])
-        self.assertEqual(recorded, [])
+        self.assertEqual([item["result"] for item in recorded], ["LOSS"])
         self.assertEqual(len(incomplete), 1)
         self.assertIsNone(bot.active_signal)
+
+    def test_known_loss_is_not_lost_when_later_overlay_is_unknown(self):
+        recorded, finals = [], []
+        bot.in_signal_window = lambda: True
+        bot.schedule_signal_entry = lambda value: {**value, "entry_at": 200, "expires_at": None}
+        bot.send_signal_to_telegram = lambda *args, **kwargs: None
+        bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
+        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+
+        first = signal(0)
+        bot.active_signal = first
+        bot.handle_signal_outcome(first, "LOSS", 100)
+
+        later = signal(1)
+        later["result"] = "UNKNOWN"
+        bot.active_signal, bot.pending_signal = later, None
+        bot.handle_signal_outcome(later, "UNKNOWN", 300)
+
+        self.assertEqual([item["result"] for item in recorded], ["LOSS", "UNKNOWN"])
+        self.assertEqual([item["result"] for item in finals], ["UNKNOWN"])
 
     def test_unentered_signal_gets_terminal_unknown_before_new_search(self):
         finals, recorded = [], []
@@ -254,9 +275,8 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.finalize_pending_signal(current, 100, "ціна входу недоступна")
 
         self.assertEqual(len(finals), 1)
-        self.assertEqual(finals[0]["result"], "UNKNOWN")
-        self.assertEqual(len(recorded), 1)
-        self.assertEqual(recorded[0]["result"], "UNKNOWN")
+        self.assertEqual(finals[0]["result"], "NOT_ENTERED")
+        self.assertEqual(recorded, [])
         self.assertIsNone(bot.pending_signal)
 
     def test_failed_terminal_message_is_queued_without_blocking_new_search(self):

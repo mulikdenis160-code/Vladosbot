@@ -613,6 +613,8 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
         "✅ ВИГРАШ" if signal["result"] == "WIN"
         else "❌ ПРОГРАШ" if signal["result"] == "LOSS"
         else "➖ НІЧИЯ / ПОВЕРНЕННЯ" if signal["result"] == "DRAW"
+        else "⏭ НЕ ВІДБУЛОСЯ — ЦІНУ ВХОДУ НЕ ЗАФІКСОВАНО"
+        if signal["result"] == "NOT_ENTERED"
         else "⚠️ НЕ ВИЗНАЧЕНО"
     )
     text = (
@@ -1005,12 +1007,16 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         signal["pair"], outcome, signal["entry_price"],
         signal.get("close_price", "немає даних"), signal["attempt"] + 1,
     )
+    if outcome in {"WIN", "LOSS", "DRAW"} and not signal.get("result_recorded"):
+        record_signal_result(signal)
+        signal["result_recorded"] = True
     has_overlay_left = signal["attempt"] < MAX_OVERLAYS
     if outcome == "LOSS" and has_overlay_left and in_signal_window():
         replacement = dict(signal)
         replacement["attempt"] += 1
         replacement["entry_price"] = signal.get("close_price", signal["entry_price"])
         replacement["result"] = None
+        replacement.pop("result_recorded", None)
         replacement.pop("close_price", None)
         replacement["image_base64"] = ""
         replacement = schedule_signal_entry(replacement)
@@ -1049,8 +1055,9 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         next_signal_at = now + 2
         maybe_send_daily_summary(now)
         return
-    record_signal_result(signal)
-    signal["result_recorded"] = True
+    if not signal.get("result_recorded"):
+        record_signal_result(signal)
+        signal["result_recorded"] = True
     if outcome == "LOSS" and not has_overlay_left:
         start_market_pause(now, signal)
     deliver_terminal_result(signal, now)
@@ -1133,14 +1140,12 @@ def finalize_pending_signal(
     signal: dict[str, Any], now: float, reason: str
 ) -> None:
     global active_signal, pending_signal, next_signal_at
-    signal["result"] = "UNKNOWN"
+    signal["result"] = "NOT_ENTERED"
     signal["result_error"] = reason
     log.warning(
-        "Сигнал %s не активовано: %s; новий пошук буде дозволено після результату",
+        "Сигнал %s не активовано: %s; у статистику угод не додається",
         signal["pair"], reason,
     )
-    record_signal_result(signal)
-    signal["result_recorded"] = True
     deliver_terminal_result(signal, now)
 
 
@@ -1993,6 +1998,8 @@ def send_result_to_telegram(signal: dict[str, Any]) -> None:
         "✅ ВИГРАШ" if signal["result"] == "WIN"
         else "❌ ПРОГРАШ" if signal["result"] == "LOSS"
         else "➖ НІЧИЯ / ПОВЕРНЕННЯ" if signal["result"] == "DRAW"
+        else "⏭ НЕ ВІДБУЛОСЯ — ЦІНУ ВХОДУ НЕ ЗАФІКСОВАНО"
+        if signal["result"] == "NOT_ENTERED"
         else "⚠️ НЕ ВИЗНАЧЕНО"
     )
     text = (
@@ -2385,12 +2392,16 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         signal["pair"], outcome, signal["entry_price"],
         signal.get("close_price", "немає даних"), signal["attempt"] + 1,
     )
+    if outcome in {"WIN", "LOSS", "DRAW"} and not signal.get("result_recorded"):
+        record_signal_result(signal)
+        signal["result_recorded"] = True
     has_overlay_left = signal["attempt"] < MAX_OVERLAYS
     if outcome == "LOSS" and has_overlay_left and in_signal_window():
         replacement = dict(signal)
         replacement["attempt"] += 1
         replacement["entry_price"] = signal.get("close_price", signal["entry_price"])
         replacement["result"] = None
+        replacement.pop("result_recorded", None)
         replacement.pop("close_price", None)
         replacement["image_base64"] = ""
         replacement = schedule_signal_entry(replacement)
@@ -2429,8 +2440,9 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         next_signal_at = now + 2
         maybe_send_daily_summary(now)
         return
-    record_signal_result(signal)
-    signal["result_recorded"] = True
+    if not signal.get("result_recorded"):
+        record_signal_result(signal)
+        signal["result_recorded"] = True
     if outcome == "LOSS" and not has_overlay_left:
         start_market_pause(now, signal)
     deliver_terminal_result(signal, now)
@@ -2513,14 +2525,12 @@ def finalize_pending_signal(
     signal: dict[str, Any], now: float, reason: str
 ) -> None:
     global active_signal, pending_signal, next_signal_at
-    signal["result"] = "UNKNOWN"
+    signal["result"] = "NOT_ENTERED"
     signal["result_error"] = reason
     log.warning(
-        "Сигнал %s не активовано: %s; новий пошук буде дозволено після результату",
+        "Сигнал %s не активовано: %s; у статистику угод не додається",
         signal["pair"], reason,
     )
-    record_signal_result(signal)
-    signal["result_recorded"] = True
     deliver_terminal_result(signal, now)
 
 
