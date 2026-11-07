@@ -707,7 +707,7 @@ def send_incomplete_series_to_telegram(signal: dict[str, Any]) -> None:
         "text": (
             f"⏹ СЕРІЮ ЗУПИНЕНО • {signal['pair']} OTC\n\n"
             "Наступне перекриття не відкрито, бо завершився робочий час. "
-            "Ця незавершена серія не врахована як програш у статистиці."
+            "Мінус за завершену спробу вже врахований у статистиці."
         ),
     })
 
@@ -869,7 +869,34 @@ def generate_best_signal() -> Optional[dict[str, Any]]:
         signal_search_lock.release()
 
 
-def _generate_best_signal() -> Optional[dict[str, Any]]:
+def select_rotating_pairs(
+    eligible: list[str],
+    start_index: int,
+    limit: int,
+    excluded_pairs: Optional[set[str]] = None,
+) -> tuple[list[str], int]:
+    if not eligible:
+        return [], start_index
+    excluded = excluded_pairs or set()
+    available_count = sum(pair not in excluded for pair in eligible)
+    batch_size = min(max(1, limit), available_count)
+    if not batch_size:
+        return [], start_index % len(eligible)
+    selected = []
+    last_index = start_index % len(eligible)
+    for offset in range(len(eligible)):
+        index = (start_index + offset) % len(eligible)
+        pair = eligible[index]
+        if pair in excluded:
+            continue
+        selected.append(pair)
+        last_index = index
+        if len(selected) >= batch_size:
+            break
+    return selected, (last_index + 1) % len(eligible)
+
+
+def _generate_best_signal(excluded_pairs: Optional[set[str]] = None) -> Optional[dict[str, Any]]:
     global scan_cursor
     if time.monotonic() < gemini_next_request_at:
         return None
@@ -881,9 +908,11 @@ def _generate_best_signal() -> Optional[dict[str, Any]]:
     )
     if not eligible:
         return None
-    batch_size = min(SIGNAL_SCAN_PAIRS, len(eligible))
-    selected = [eligible[(scan_cursor + index) % len(eligible)] for index in range(batch_size)]
-    scan_cursor = (scan_cursor + batch_size) % len(eligible)
+    selected, scan_cursor = select_rotating_pairs(
+        eligible, scan_cursor, SIGNAL_SCAN_PAIRS, excluded_pairs
+    )
+    if not selected:
+        return None
 
     snapshots: list[tuple[str, dict[str, Any]]] = []
     for active in selected:
@@ -962,7 +991,7 @@ def format_result(signal: dict[str, Any]) -> str:
 
 
 def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> None:
-    global active_signal, pending_signal, next_signal_at
+    global active_signal, pending_signal, next_signal_at, signal_searching
     log.info(
         "Результат спроби: %s %s entry=%s close=%s attempt=%s",
         signal["pair"], outcome, signal["entry_price"],
@@ -973,37 +1002,55 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         signal["result_recorded"] = True
     has_overlay_left = signal["attempt"] < MAX_OVERLAYS
     if outcome == "LOSS" and has_overlay_left and in_signal_window():
-        replacement = dict(signal)
-        replacement["attempt"] += 1
-        replacement["entry_price"] = signal.get("close_price", signal["entry_price"])
-        replacement["result"] = None
-        replacement.pop("result_recorded", None)
-        replacement.pop("close_price", None)
-        replacement["image_base64"] = ""
-        replacement = schedule_signal_entry(replacement)
+        excluded_pairs = set(signal.get("series_pairs") or [signal["raw_pair"]])
         with signal_state_lock:
-            active_signal = None
-            pending_signal = replacement
+            signal_searching = True
+        try:
+            replacement = _generate_best_signal(excluded_pairs=excluded_pairs)
+        except Exception as exc:
+            replacement = None
+            log.warning(
+                "Не вдалося повторно проаналізувати іншу пару після LOSS %s: %s",
+                signal["pair"], type(exc).__name__,
+            )
+        finally:
+            with signal_state_lock:
+                signal_searching = False
+
+        if replacement:
+            replacement["attempt"] = signal["attempt"] + 1
+            replacement["series_pairs"] = [
+                *sorted(excluded_pairs), replacement["raw_pair"],
+            ]
+            replacement.pop("result_recorded", None)
+            replacement = schedule_signal_entry(replacement)
+            with signal_state_lock:
+                active_signal = None
+                pending_signal = replacement
+        else:
+            log.info(
+                "Після LOSS %s не знайдено якісної альтернативної пари; догін не створюється",
+                signal["pair"],
+            )
+            deliver_terminal_result(signal, now)
+            return
         persist_signal_state()
         log.info(
-            "Невдала спроба %s/%s переведена в перекриття %s/%s",
+            "Після LOSS %s новий аналіз іншої пари: спроба %s/%s, пара %s",
+            signal["pair"],
             signal["attempt"] + 1, MAX_OVERLAYS + 1,
-            replacement["attempt"], MAX_OVERLAYS,
+            replacement["pair"],
         )
         try:
-            send_signal_to_telegram(
-                replacement,
-                f"🔁 ПЕРЕКРИТТЯ {replacement['attempt']}/{MAX_OVERLAYS}\n",
-                "overlay",
-            )
+            send_signal_to_telegram(replacement)
         except Exception as exc:
-            log.warning("Не вдалося надіслати перекриття у Telegram: %s", type(exc).__name__)
+            log.warning("Не вдалося надіслати повторно проаналізований сигнал: %s", type(exc).__name__)
         return
 
     if outcome == "LOSS" and has_overlay_left:
         log.warning(
             "Серію %s не продовжено: наступне перекриття поза робочим вікном; "
-            "проміжний результат не враховано",
+            "результат спроби враховано, нове перекриття не створено",
             signal["pair"],
         )
         try:
@@ -2053,7 +2100,7 @@ def send_incomplete_series_to_telegram(signal: dict[str, Any]) -> None:
         "text": (
             f"⏹ СЕРІЮ ЗУПИНЕНО • {signal['pair']} OTC\n\n"
             "Наступне перекриття не відкрито, бо завершився робочий час. "
-            "Ця незавершена серія не врахована як програш у статистиці."
+            "Мінус за завершену спробу вже врахований у статистиці."
         ),
     })
 
@@ -2215,7 +2262,7 @@ def generate_best_signal() -> Optional[dict[str, Any]]:
         signal_search_lock.release()
 
 
-def _generate_best_signal() -> Optional[dict[str, Any]]:
+def _generate_best_signal(excluded_pairs: Optional[set[str]] = None) -> Optional[dict[str, Any]]:
     global scan_cursor
     if time.monotonic() < gemini_next_request_at:
         return None
@@ -2227,9 +2274,11 @@ def _generate_best_signal() -> Optional[dict[str, Any]]:
     )
     if not eligible:
         return None
-    batch_size = min(SIGNAL_SCAN_PAIRS, len(eligible))
-    selected = [eligible[(scan_cursor + index) % len(eligible)] for index in range(batch_size)]
-    scan_cursor = (scan_cursor + batch_size) % len(eligible)
+    selected, scan_cursor = select_rotating_pairs(
+        eligible, scan_cursor, SIGNAL_SCAN_PAIRS, excluded_pairs
+    )
+    if not selected:
+        return None
 
     snapshots: list[tuple[str, dict[str, Any]]] = []
     for active in selected:
@@ -2308,7 +2357,7 @@ def format_result(signal: dict[str, Any]) -> str:
 
 
 def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> None:
-    global active_signal, pending_signal, next_signal_at
+    global active_signal, pending_signal, next_signal_at, signal_searching
     log.info(
         "Результат спроби: %s %s entry=%s close=%s attempt=%s",
         signal["pair"], outcome, signal["entry_price"],
@@ -2319,37 +2368,55 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         signal["result_recorded"] = True
     has_overlay_left = signal["attempt"] < MAX_OVERLAYS
     if outcome == "LOSS" and has_overlay_left and in_signal_window():
-        replacement = dict(signal)
-        replacement["attempt"] += 1
-        replacement["entry_price"] = signal.get("close_price", signal["entry_price"])
-        replacement["result"] = None
-        replacement.pop("result_recorded", None)
-        replacement.pop("close_price", None)
-        replacement["image_base64"] = ""
-        replacement = schedule_signal_entry(replacement)
+        excluded_pairs = set(signal.get("series_pairs") or [signal["raw_pair"]])
         with signal_state_lock:
-            active_signal = None
-            pending_signal = replacement
+            signal_searching = True
+        try:
+            replacement = _generate_best_signal(excluded_pairs=excluded_pairs)
+        except Exception as exc:
+            replacement = None
+            log.warning(
+                "Не вдалося повторно проаналізувати іншу пару після LOSS %s: %s",
+                signal["pair"], type(exc).__name__,
+            )
+        finally:
+            with signal_state_lock:
+                signal_searching = False
+
+        if replacement:
+            replacement["attempt"] = signal["attempt"] + 1
+            replacement["series_pairs"] = [
+                *sorted(excluded_pairs), replacement["raw_pair"],
+            ]
+            replacement.pop("result_recorded", None)
+            replacement = schedule_signal_entry(replacement)
+            with signal_state_lock:
+                active_signal = None
+                pending_signal = replacement
+        else:
+            log.info(
+                "Після LOSS %s не знайдено якісної альтернативної пари; догін не створюється",
+                signal["pair"],
+            )
+            deliver_terminal_result(signal, now)
+            return
         persist_signal_state()
         log.info(
-            "Невдала спроба %s/%s переведена в перекриття %s/%s",
+            "Після LOSS %s новий аналіз іншої пари: спроба %s/%s, пара %s",
+            signal["pair"],
             signal["attempt"] + 1, MAX_OVERLAYS + 1,
-            replacement["attempt"], MAX_OVERLAYS,
+            replacement["pair"],
         )
         try:
-            send_signal_to_telegram(
-                replacement,
-                f"🔁 ПЕРЕКРИТТЯ {replacement['attempt']}/{MAX_OVERLAYS}\n",
-                "overlay",
-            )
+            send_signal_to_telegram(replacement)
         except Exception as exc:
-            log.warning("Не вдалося надіслати перекриття у Telegram: %s", type(exc).__name__)
+            log.warning("Не вдалося надіслати повторно проаналізований сигнал: %s", type(exc).__name__)
         return
 
     if outcome == "LOSS" and has_overlay_left:
         log.warning(
             "Серію %s не продовжено: наступне перекриття поза робочим вікном; "
-            "проміжний результат не враховано",
+            "результат спроби враховано, нове перекриття не створено",
             signal["pair"],
         )
         try:

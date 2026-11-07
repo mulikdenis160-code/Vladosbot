@@ -100,43 +100,109 @@ class OverlayAndPauseTests(unittest.TestCase):
 
     def test_two_losses_become_overlays_then_third_is_final_loss(self):
         overlays, finals, recorded, pauses = [], [], [], []
+        generated_candidates = [
+            {
+                **signal(0),
+                "pair": "GBP/USD",
+                "raw_pair": "GBPUSD_otc",
+                "direction": "ВНИЗ",
+                "entry_price": 1.3,
+                "result": None,
+            },
+            {
+                **signal(0),
+                "pair": "USD/JPY",
+                "raw_pair": "USDJPY_otc",
+                "direction": "ВГОРУ",
+                "entry_price": 150.0,
+                "result": None,
+            },
+        ]
+        excluded_on_recovery = []
+        original_generator = bot._generate_best_signal
+
+        def generate_recovery(excluded_pairs=None):
+            excluded_on_recovery.append(set(excluded_pairs or set()))
+            return deepcopy(generated_candidates.pop(0)) if generated_candidates else None
+
         bot.in_signal_window = lambda: True
         bot.schedule_signal_entry = lambda value: {**value, "entry_at": 200, "expires_at": None}
-        bot.send_signal_to_telegram = lambda value, prefix, image: overlays.append(
-            (deepcopy(value), prefix, image)
-        )
+        bot.send_signal_to_telegram = lambda value, *args, **kwargs: overlays.append(deepcopy(value))
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
         bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
         bot.start_market_pause = lambda now, value: pauses.append((now, deepcopy(value)))
+        bot._generate_best_signal = generate_recovery
 
-        first = signal(0)
-        bot.active_signal = first
-        bot.handle_signal_outcome(first, "LOSS", 100)
-        self.assertEqual(len(overlays), 1)
-        self.assertEqual(overlays[0][1], "🔁 ПЕРЕКРИТТЯ 1/2\n")
-        self.assertEqual(overlays[0][2], "overlay")
-        self.assertEqual(len(finals), 0)
-        self.assertEqual([item["result"] for item in recorded], ["LOSS"])
-        self.assertEqual(bot.pending_signal["attempt"], 1)
-        self.assertFalse(bot.pending_signal.get("result_recorded", False))
+        try:
+            first = signal(0)
+            bot.active_signal = first
+            bot.handle_signal_outcome(first, "LOSS", 100)
+            self.assertEqual(len(overlays), 1)
+            self.assertEqual(overlays[0]["pair"], "GBP/USD")
+            self.assertEqual(overlays[0]["direction"], "ВНИЗ")
+            self.assertEqual(overlays[0]["attempt"], 1)
+            self.assertEqual(overlays[0]["series_pairs"], ["EURUSD_otc", "GBPUSD_otc"])
+            self.assertEqual(len(finals), 0)
+            self.assertEqual([item["result"] for item in recorded], ["LOSS"])
+            self.assertEqual(excluded_on_recovery, [{"EURUSD_otc"}])
 
-        second = signal(1)
-        bot.active_signal, bot.pending_signal = second, None
-        bot.handle_signal_outcome(second, "LOSS", 200)
-        self.assertEqual(len(overlays), 2)
-        self.assertEqual(overlays[1][1], "🔁 ПЕРЕКРИТТЯ 2/2\n")
-        self.assertEqual(len(finals), 0)
-        self.assertEqual([item["result"] for item in recorded], ["LOSS", "LOSS"])
-        self.assertEqual(bot.pending_signal["attempt"], 2)
+            second = deepcopy(bot.pending_signal)
+            second["result"] = "LOSS"
+            second["close_price"] = 1.25
+            bot.active_signal, bot.pending_signal = second, None
+            bot.handle_signal_outcome(second, "LOSS", 200)
+            self.assertEqual(len(overlays), 2)
+            self.assertEqual(overlays[1]["pair"], "USD/JPY")
+            self.assertEqual(overlays[1]["direction"], "ВГОРУ")
+            self.assertEqual(overlays[1]["attempt"], 2)
+            self.assertEqual(
+                excluded_on_recovery[1], {"EURUSD_otc", "GBPUSD_otc"}
+            )
+            self.assertEqual([item["result"] for item in recorded], ["LOSS", "LOSS"])
 
-        third = signal(2)
-        bot.active_signal, bot.pending_signal = third, None
-        bot.handle_signal_outcome(third, "LOSS", 300)
-        self.assertEqual(len(finals), 1)
-        self.assertEqual(finals[0]["result"], "LOSS")
-        self.assertEqual([item["result"] for item in recorded], ["LOSS", "LOSS", "LOSS"])
-        self.assertEqual(len(pauses), 1)
+            third = deepcopy(bot.pending_signal)
+            third["result"] = "LOSS"
+            bot.active_signal, bot.pending_signal = third, None
+            bot.handle_signal_outcome(third, "LOSS", 300)
+            self.assertEqual(len(finals), 1)
+            self.assertEqual(finals[0]["result"], "LOSS")
+            self.assertEqual([item["result"] for item in recorded], ["LOSS", "LOSS", "LOSS"])
+            self.assertEqual(len(pauses), 1)
+            self.assertIsNone(bot.active_signal)
+        finally:
+            bot._generate_best_signal = original_generator
+
+    def test_no_alternative_pair_ends_series_without_blind_dogon(self):
+        finals, recorded = [], []
+        bot.in_signal_window = lambda: True
+        bot._generate_best_signal = lambda excluded_pairs=None: None
+        bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
+        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+
+        current = signal(0)
+        bot.active_signal = current
+        bot.handle_signal_outcome(current, "LOSS", 100)
+
+        self.assertIsNone(bot.pending_signal)
         self.assertIsNone(bot.active_signal)
+        self.assertEqual([item["result"] for item in recorded], ["LOSS"])
+        self.assertEqual([item["result"] for item in finals], ["LOSS"])
+
+    def test_pair_rotation_skips_all_pairs_already_used_in_series(self):
+        eligible = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc"]
+        first, cursor = bot.select_rotating_pairs(
+            eligible, 0, 1, {"EURUSD_otc"}
+        )
+        second, cursor = bot.select_rotating_pairs(
+            eligible, cursor, 1, {"EURUSD_otc", "GBPUSD_otc"}
+        )
+        none, _ = bot.select_rotating_pairs(
+            eligible, cursor, 1, set(eligible)
+        )
+
+        self.assertEqual(first, ["GBPUSD_otc"])
+        self.assertEqual(second, ["USDJPY_otc"])
+        self.assertEqual(none, [])
 
     def test_pause_extends_for_flat_market(self):
         messages = []
@@ -247,23 +313,34 @@ class OverlayAndPauseTests(unittest.TestCase):
 
     def test_known_loss_is_not_lost_when_later_overlay_is_unknown(self):
         recorded, finals = [], []
+        original_generator = bot._generate_best_signal
         bot.in_signal_window = lambda: True
         bot.schedule_signal_entry = lambda value: {**value, "entry_at": 200, "expires_at": None}
         bot.send_signal_to_telegram = lambda *args, **kwargs: None
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
         bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+        bot._generate_best_signal = lambda excluded_pairs=None: {
+            **signal(0),
+            "pair": "GBP/USD",
+            "raw_pair": "GBPUSD_otc",
+            "direction": "ВНИЗ",
+            "result": None,
+        }
 
-        first = signal(0)
-        bot.active_signal = first
-        bot.handle_signal_outcome(first, "LOSS", 100)
+        try:
+            first = signal(0)
+            bot.active_signal = first
+            bot.handle_signal_outcome(first, "LOSS", 100)
 
-        later = signal(1)
-        later["result"] = "UNKNOWN"
-        bot.active_signal, bot.pending_signal = later, None
-        bot.handle_signal_outcome(later, "UNKNOWN", 300)
+            later = signal(1)
+            later["result"] = "UNKNOWN"
+            bot.active_signal, bot.pending_signal = later, None
+            bot.handle_signal_outcome(later, "UNKNOWN", 300)
 
-        self.assertEqual([item["result"] for item in recorded], ["LOSS", "UNKNOWN"])
-        self.assertEqual([item["result"] for item in finals], ["UNKNOWN"])
+            self.assertEqual([item["result"] for item in recorded], ["LOSS", "UNKNOWN"])
+            self.assertEqual([item["result"] for item in finals], ["UNKNOWN"])
+        finally:
+            bot._generate_best_signal = original_generator
 
     def test_unentered_signal_gets_terminal_unknown_before_new_search(self):
         finals, recorded = [], []
