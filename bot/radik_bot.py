@@ -540,7 +540,13 @@ def send_signal_to_telegram(
         return
     pair = signal["pair"].replace("/", " ").upper()
     direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
-    text = f"{pair} OTC {SIGNAL_DURATION_SEC // 60} Минут {direction}"
+    entry_at = signal.get("entry_at")
+    entry_line = (
+        f"\nВходим со следующей свечи в {entry_time_label(entry_at)}:00 "
+        f"({SIGNAL_TIMEZONE})"
+        if entry_at else "\nВходим со следующей свечи"
+    )
+    text = f"{pair} OTC {SIGNAL_DURATION_SEC // 60} Минут {direction}{entry_line}"
     telegram_request("/send-message", {"text": text})
 
 
@@ -548,20 +554,6 @@ def send_search_to_telegram() -> None:
     if not TELEGRAM_CHAT_ID:
         return
     text = "🔎 ПОШУК СИГНАЛУ\n\nАналізую ринок до 3 хвилин та чекаю на якісний сетап."
-    image_url = telegram_image_url("search")
-    if image_url:
-        try:
-            telegram_request("/send-photo", {
-                "image_url": image_url,
-                "caption": text,
-                "filename": "search.jpg",
-            })
-            return
-        except Exception as exc:
-            log.warning(
-                "Не вдалося надіслати зображення пошуку (%s), пробую текст",
-                type(exc).__name__,
-            )
     telegram_request("/send-message", {"text": text})
 
 
@@ -1894,7 +1886,13 @@ def send_signal_to_telegram(
         return
     pair = signal["pair"].replace("/", " ").upper()
     direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
-    text = f"{pair} OTC {SIGNAL_DURATION_SEC // 60} Минут {direction}"
+    entry_at = signal.get("entry_at")
+    entry_line = (
+        f"\nВходим со следующей свечи в {entry_time_label(entry_at)}:00 "
+        f"({SIGNAL_TIMEZONE})"
+        if entry_at else "\nВходим со следующей свечи"
+    )
+    text = f"{pair} OTC {SIGNAL_DURATION_SEC // 60} Минут {direction}{entry_line}"
     telegram_request("/send-message", {"text": text})
 
 
@@ -1902,20 +1900,6 @@ def send_search_to_telegram() -> None:
     if not TELEGRAM_CHAT_ID:
         return
     text = "🔎 ПОШУК СИГНАЛУ\n\nАналізую ринок до 3 хвилин та чекаю на якісний сетап."
-    image_url = telegram_image_url("search")
-    if image_url:
-        try:
-            telegram_request("/send-photo", {
-                "image_url": image_url,
-                "caption": text,
-                "filename": "search.jpg",
-            })
-            return
-        except Exception as exc:
-            log.warning(
-                "Не вдалося надіслати зображення пошуку (%s), пробую текст",
-                type(exc).__name__,
-            )
     telegram_request("/send-message", {"text": text})
 
 

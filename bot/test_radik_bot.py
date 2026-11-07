@@ -342,6 +342,7 @@ class OverlayAndPauseTests(unittest.TestCase):
     def test_signal_is_sent_as_one_plain_line_with_five_minute_expiry(self):
         requests = []
         original_duration = bot.SIGNAL_DURATION_SEC
+        original_entry_label = bot.entry_time_label
 
         def request(path, payload):
             requests.append((path, payload))
@@ -349,16 +350,33 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         try:
             bot.SIGNAL_DURATION_SEC = 300
+            bot.entry_time_label = lambda _timestamp: "14:32"
             bot.telegram_request = request
             current = signal(0)
             current["pair"] = "AUD/CAD"
             current["direction"] = "ВНИЗ"
+            current["entry_at"] = 1_800_000_000
             bot.send_signal_to_telegram(current)
 
             self.assertEqual([item[0] for item in requests], ["/send-message"])
-            self.assertEqual(requests[0][1]["text"], "AUD CAD OTC 5 Минут вниз")
+            self.assertEqual(
+                requests[0][1]["text"],
+                "AUD CAD OTC 5 Минут вниз\nВходим со следующей свечи в 14:32:00 (Europe/Kyiv)",
+            )
         finally:
             bot.SIGNAL_DURATION_SEC = original_duration
+            bot.entry_time_label = original_entry_label
+
+    def test_search_notice_is_text_only(self):
+        requests = []
+        bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
+            "ok": True, "message_id": 126,
+        }
+
+        bot.send_search_to_telegram()
+
+        self.assertEqual([path for path, _ in requests], ["/send-message"])
+        self.assertIn("ПОШУК СИГНАЛУ", requests[0][1]["text"])
 
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []
