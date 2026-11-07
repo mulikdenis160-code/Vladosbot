@@ -1,5 +1,6 @@
 import unittest
 from copy import deepcopy
+from unittest.mock import patch
 
 from bot import radik_bot as bot
 
@@ -381,7 +382,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(bot.pending_result_deliveries, [])
         self.assertIsNone(bot.result_delivery_last_error)
 
-    def test_result_uses_public_photo_url(self):
+    def test_result_is_text_only_and_in_russian(self):
         requests = []
         bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
             "ok": True, "message_id": 123,
@@ -391,20 +392,15 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         bot.send_result_to_telegram(current)
 
-        self.assertEqual([request[0] for request in requests], ["/send-photo"])
-        self.assertIn("✅ ВИГРАШ", requests[0][1]["caption"])
-        self.assertEqual(
-            requests[0][1]["image_url"],
-            "https://example.test/api/telegram-image/win",
-        )
+        self.assertEqual([request[0] for request in requests], ["/send-message"])
+        self.assertIn("✅ ВЫИГРЫШ", requests[0][1]["text"])
+        self.assertIn("Цена входа:", requests[0][1]["text"])
 
-    def test_result_falls_back_to_text_when_public_photo_fails(self):
+    def test_result_never_sends_a_photo(self):
         requests = []
 
         def request(path, payload):
             requests.append((path, payload))
-            if path == "/send-photo":
-                raise ConnectionError("photo unavailable")
             return {"ok": True, "message_id": 124}
 
         bot.telegram_request = request
@@ -413,13 +409,12 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         bot.send_result_to_telegram(current)
 
-        self.assertEqual([request[0] for request in requests], ["/send-photo", "/send-message"])
-        self.assertIn("✅ ВИГРАШ", requests[1][1]["text"])
+        self.assertEqual([request[0] for request in requests], ["/send-message"])
+        self.assertIn("✅ ВЫИГРЫШ", requests[0][1]["text"])
 
     def test_signal_is_sent_as_one_plain_line_with_five_minute_expiry(self):
         requests = []
         original_duration = bot.SIGNAL_DURATION_SEC
-        original_entry_label = bot.entry_time_label
 
         def request(path, payload):
             requests.append((path, payload))
@@ -427,22 +422,27 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         try:
             bot.SIGNAL_DURATION_SEC = 300
-            bot.entry_time_label = lambda _timestamp: "14:32"
             bot.telegram_request = request
             current = signal(0)
             current["pair"] = "AUD/CAD"
             current["direction"] = "ВНИЗ"
-            current["entry_at"] = 1_800_000_000
-            bot.send_signal_to_telegram(current)
+            current["entry_at"] = 1_800_000_040
+            with patch("bot.radik_bot.time.time", return_value=1_800_000_000):
+                bot.send_signal_to_telegram(current)
 
             self.assertEqual([item[0] for item in requests], ["/send-message"])
             self.assertEqual(
                 requests[0][1]["text"],
-                "AUD CAD OTC 5 Минут вниз\nВходим со следующей свечи в 14:32:00 (Europe/Kyiv)",
+                "AUD CAD OTC\nНа 5 минут вниз\nЗаходим со следующей свечи через 40 сек.",
             )
         finally:
             bot.SIGNAL_DURATION_SEC = original_duration
-            bot.entry_time_label = original_entry_label
+
+    def test_entry_countdown_rounds_up_and_never_goes_negative(self):
+        with patch("bot.radik_bot.time.time", return_value=100.0):
+            self.assertEqual(bot.seconds_until_entry(134.2), 35)
+            self.assertEqual(bot.seconds_until_entry(100.0), 0)
+            self.assertEqual(bot.seconds_until_entry(99.0), 0)
 
     def test_search_notice_is_text_only(self):
         requests = []
@@ -453,7 +453,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.send_search_to_telegram()
 
         self.assertEqual([path for path, _ in requests], ["/send-message"])
-        self.assertIn("ПОШУК СИГНАЛУ", requests[0][1]["text"])
+        self.assertIn("ПОИСК СИГНАЛА", requests[0][1]["text"])
 
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []

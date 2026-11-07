@@ -532,6 +532,12 @@ def telegram_image_url(kind: str) -> str:
     return f"{TELEGRAM_PUBLIC_BASE_URL}/api/telegram-image/{kind}"
 
 
+def seconds_until_entry(entry_at: Optional[float]) -> Optional[int]:
+    if entry_at is None:
+        return None
+    return max(0, math.ceil(float(entry_at) - time.time()))
+
+
 def send_signal_to_telegram(
     signal: dict[str, Any], caption_prefix: str = "", image_kind: str = "signal"
 ) -> None:
@@ -541,19 +547,23 @@ def send_signal_to_telegram(
     pair = signal["pair"].replace("/", " ").upper()
     direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
     entry_at = signal.get("entry_at")
+    remaining = seconds_until_entry(entry_at)
     entry_line = (
-        f"\nВходим со следующей свечи в {entry_time_label(entry_at)}:00 "
-        f"({SIGNAL_TIMEZONE})"
-        if entry_at else "\nВходим со следующей свечи"
+        f"Заходим со следующей свечи через {remaining} сек."
+        if remaining is not None else "Заходим со следующей свечи."
     )
-    text = f"{pair} OTC {SIGNAL_DURATION_SEC // 60} Минут {direction}{entry_line}"
+    text = (
+        f"{pair} OTC\n"
+        f"На {SIGNAL_DURATION_SEC // 60} минут {direction}\n"
+        f"{entry_line}"
+    )
     telegram_request("/send-message", {"text": text})
 
 
 def send_search_to_telegram() -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    text = "🔎 ПОШУК СИГНАЛУ\n\nАналізую ринок до 3 хвилин та чекаю на якісний сетап."
+    text = "🔎 ПОИСК СИГНАЛА\n\nАнализирую рынок и жду подтверждённую ситуацию."
     telegram_request("/send-message", {"text": text})
 
 
@@ -562,46 +572,30 @@ def send_search_finished_to_telegram() -> None:
         return
     telegram_request("/send-message", {
         "text": (
-            "⏸ ПОШУК ЗАВЕРШЕНО\n\n"
-            f"За {SIGNAL_SEARCH_TIMEOUT_SEC // 60} хв якісний сигнал не підтверджено. "
-            f"Наступна перевірка через {SIGNAL_RETRY_DELAY_SEC // 60} хв."
+            "⏸ ПОИСК ЗАВЕРШЁН\n\n"
+            f"За {SIGNAL_SEARCH_TIMEOUT_SEC // 60} мин подтверждённый сигнал не найден. "
+            f"Следующая проверка через {SIGNAL_RETRY_DELAY_SEC // 60} мин."
         ),
     })
 
 
 def send_result_to_telegram(signal: dict[str, Any]) -> None:
     label = (
-        "✅ ВИГРАШ" if signal["result"] == "WIN"
-        else "❌ ПРОГРАШ" if signal["result"] == "LOSS"
-        else "➖ НІЧИЯ / ПОВЕРНЕННЯ" if signal["result"] == "DRAW"
-        else "⏭ НЕ ВІДБУЛОСЯ — ЦІНУ ВХОДУ НЕ ЗАФІКСОВАНО"
+        "✅ ВЫИГРЫШ" if signal["result"] == "WIN"
+        else "❌ ПРОИГРЫШ" if signal["result"] == "LOSS"
+        else "➖ НИЧЬЯ / ВОЗВРАТ" if signal["result"] == "DRAW"
+        else "⏭ НЕ СОСТОЯЛАСЬ — ЦЕНА ВХОДА НЕ ЗАФИКСИРОВАНА"
         if signal["result"] == "NOT_ENTERED"
-        else "⚠️ НЕ ВИЗНАЧЕНО"
+        else "⚠️ НЕ ОПРЕДЕЛЕНО"
     )
     text = (
-        f"📌 РЕЗУЛЬТАТ • {signal['pair']} OTC\n\n"
+        f"📌 РЕЗУЛЬТАТ • {signal['pair'].replace('/', ' ')} OTC\n\n"
         f"{label}\n"
-        f"Ціна входу: {signal.get('entry_price') or 'не зафіксовано'}\n"
-        f"Ціна закриття: {signal.get('close_price', 'немає даних')}\n"
-        f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
+        f"Цена входа: {signal.get('entry_price') or 'не зафиксирована'}\n"
+        f"Цена закрытия: {signal.get('close_price', 'нет данных')}\n"
+        f"Попытка: {signal['attempt'] + 1} из {MAX_OVERLAYS + 1}"
     )
-    image_kind = {"WIN": "win", "LOSS": "loss"}.get(signal.get("result"))
-    image_url = telegram_image_url(image_kind) if image_kind else ""
-    if image_url:
-        try:
-            delivery = telegram_request("/send-photo", {
-                "image_url": image_url,
-                "caption": text,
-                "filename": f"{image_kind}.jpg",
-            })
-        except Exception as exc:
-            log.warning(
-                "Не вдалося надіслати картинку результату %s (%s), пробую текст",
-                signal["pair"], type(exc).__name__,
-            )
-            delivery = telegram_request("/send-message", {"text": text})
-    else:
-        delivery = telegram_request("/send-message", {"text": text})
+    delivery = telegram_request("/send-message", {"text": text})
     log.info(
         "Фінальний результат %s підтверджено Telegram message_id=%s",
         signal["pair"], delivery.get("message_id", "невідомо"),
@@ -614,28 +608,14 @@ def send_daily_summary_to_telegram(summary_date: str, stats: dict[str, int]) -> 
     net = stats["WIN"] - stats["LOSS"]
     net_label = f"+{net}" if net > 0 else str(net)
     text = (
-        f"📊 ПІДСУМОК ДНЯ • {summary_date}\n\n"
-        f"Усього спроб: {stats['total']}\n"
-        f"✅ Виграшів: {stats['WIN']}\n"
-        f"❌ Програшів: {stats['LOSS']}\n"
-        f"➖ Нічиїх: {stats['DRAW']}\n"
-        f"⚠️ Не визначено: {stats['UNKNOWN']}\n\n"
-        f"Баланс результатів: {net_label}"
+        f"📊 ИТОГИ ДНЯ • {summary_date}\n\n"
+        f"Всего попыток: {stats['total']}\n"
+        f"✅ Выигрышей: {stats['WIN']}\n"
+        f"❌ Проигрышей: {stats['LOSS']}\n"
+        f"➖ Ничьих: {stats['DRAW']}\n"
+        f"⚠️ Не определено: {stats['UNKNOWN']}\n\n"
+        f"Баланс результатов: {net_label}"
     )
-    image_url = telegram_image_url("summary")
-    if image_url:
-        try:
-            telegram_request("/send-photo", {
-                "image_url": image_url,
-                "caption": text,
-                "filename": "daily-summary.jpg",
-            })
-            return
-        except Exception as exc:
-            log.warning(
-                "Не вдалося надіслати зображення підсумку (%s), пробую текст",
-                type(exc).__name__,
-            )
     telegram_request("/send-message", {"text": text})
 
 
@@ -670,12 +650,12 @@ def maybe_send_daily_summary(now: float) -> None:
 def send_market_pause_to_telegram(minutes: int, extension: bool = False) -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    prefix = "⏸ ПАУЗА ПРОДОВЖЕНА" if extension else "⏸ СИГНАЛИ ПРИЗУПИНЕНО"
+    prefix = "⏸ ПАУЗА ПРОДЛЕНА" if extension else "⏸ СИГНАЛЫ ПРИОСТАНОВЛЕНЫ"
     telegram_request("/send-message", {
         "text": (
             f"{prefix}\n\n"
-            f"Після серії з трьох невдалих угод нові сигнали зупинено на {minutes} хвилин.\n"
-            "Бот стежить за свіжими даними ринку й продовжить пошук, коли умови покращаться."
+            f"После трёх неудачных сделок новые сигналы остановлены на {minutes} мин.\n"
+            "Бот проверяет свежие данные рынка и возобновит поиск, когда условия улучшатся."
         ),
     })
 
@@ -684,7 +664,7 @@ def send_market_resume_to_telegram() -> None:
     if not TELEGRAM_CHAT_ID:
         return
     telegram_request("/send-message", {
-        "text": "▶️ ПОШУК ВІДНОВЛЕНО\n\nРинок показав достатній рух для відновлення пошуку сигналів.",
+        "text": "▶️ ПОИСК ВОЗОБНОВЛЁН\n\nРынок показал достаточное движение для продолжения поиска сигналов.",
     })
 
 
@@ -693,9 +673,9 @@ def send_startup_safety_pause_to_telegram(minutes: int) -> None:
         return
     telegram_request("/send-message", {
         "text": (
-            "⏸ ПЕРЕВІРКА ПІСЛЯ ПЕРЕЗАПУСКУ\n\n"
-            f"Нові сигнали призупинено на {minutes} хвилин. "
-            "Бот перевірить свіжі дані кількох пар і відновить пошук лише після підтвердження ринку."
+            "⏸ ПРОВЕРКА ПОСЛЕ ПЕРЕЗАПУСКА\n\n"
+            f"Новые сигналы приостановлены на {minutes} мин. "
+            "Бот проверит свежие данные нескольких пар и возобновит поиск после подтверждения рынка."
         ),
     })
 
@@ -705,9 +685,9 @@ def send_incomplete_series_to_telegram(signal: dict[str, Any]) -> None:
         return
     telegram_request("/send-message", {
         "text": (
-            f"⏹ СЕРІЮ ЗУПИНЕНО • {signal['pair']} OTC\n\n"
-            "Наступне перекриття не відкрито, бо завершився робочий час. "
-            "Мінус за завершену спробу вже врахований у статистиці."
+            f"⏹ СЕРИЯ ОСТАНОВЛЕНА • {signal['pair'].replace('/', ' ')} OTC\n\n"
+            "Следующий сигнал не создан: рабочее время завершилось. "
+            "Проигрыш за завершённую попытку учтён в статистике."
         ),
     })
 
@@ -943,7 +923,6 @@ def _generate_best_signal(excluded_pairs: Optional[set[str]] = None) -> Optional
     candidates = [result for result in analysis_pool.map(analyze_snapshot, snapshots) if result]
     best: Optional[dict[str, Any]] = max(candidates, key=lambda item: item["confidence"], default=None)
     if best:
-        best["image_base64"] = chart_png(best["snapshot"], best["direction"])
         best.pop("snapshot", None)
     return best
 
@@ -953,9 +932,9 @@ def send_entry_confirmation(signal: dict[str, Any]) -> None:
         return
     telegram_request("/send-message", {
         "text": (
-            f"🟢 ВХІД ПІДТВЕРДЖЕНО • {signal['pair']} OTC\n\n"
-            f"Фактична ціна входу: {signal['entry_price']}\n"
-            f"Експірація: {SIGNAL_DURATION_SEC // 60} хв"
+            f"🟢 ВХОД ПОДТВЕРЖДЁН • {signal['pair'].replace('/', ' ')} OTC\n\n"
+            f"Фактическая цена входа: {signal['entry_price']}\n"
+            f"Экспирация: {SIGNAL_DURATION_SEC // 60} мин"
         ),
     })
 
@@ -983,10 +962,17 @@ def evaluate_signal(signal: dict[str, Any]) -> str:
 
 
 def format_result(signal: dict[str, Any]) -> str:
+    result_label = {
+        "WIN": "ВЫИГРЫШ",
+        "LOSS": "ПРОИГРЫШ",
+        "DRAW": "НИЧЬЯ",
+        "UNKNOWN": "НЕ ОПРЕДЕЛЕНО",
+        "NOT_ENTERED": "НЕ СОСТОЯЛАСЬ",
+    }.get(signal["result"], "НЕ ОПРЕДЕЛЕНО")
     return (
-        f"📋 ПІДСУМОК • {signal['pair']} OTC\n"
-        f"{signal['result']} | вхід: {signal['entry_price']} | закриття: {signal.get('close_price', 'немає даних')}\n"
-        f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
+        f"📋 ИТОГ • {signal['pair'].replace('/', ' ')} OTC\n"
+        f"{result_label} | вход: {signal['entry_price']} | закрытие: {signal.get('close_price', 'нет данных')}\n"
+        f"Попытка: {signal['attempt'] + 1} из {MAX_OVERLAYS + 1}"
     )
 
 
@@ -1934,19 +1920,23 @@ def send_signal_to_telegram(
     pair = signal["pair"].replace("/", " ").upper()
     direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
     entry_at = signal.get("entry_at")
+    remaining = seconds_until_entry(entry_at)
     entry_line = (
-        f"\nВходим со следующей свечи в {entry_time_label(entry_at)}:00 "
-        f"({SIGNAL_TIMEZONE})"
-        if entry_at else "\nВходим со следующей свечи"
+        f"Заходим со следующей свечи через {remaining} сек."
+        if remaining is not None else "Заходим со следующей свечи."
     )
-    text = f"{pair} OTC {SIGNAL_DURATION_SEC // 60} Минут {direction}{entry_line}"
+    text = (
+        f"{pair} OTC\n"
+        f"На {SIGNAL_DURATION_SEC // 60} минут {direction}\n"
+        f"{entry_line}"
+    )
     telegram_request("/send-message", {"text": text})
 
 
 def send_search_to_telegram() -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    text = "🔎 ПОШУК СИГНАЛУ\n\nАналізую ринок до 3 хвилин та чекаю на якісний сетап."
+    text = "🔎 ПОИСК СИГНАЛА\n\nАнализирую рынок и жду подтверждённую ситуацию."
     telegram_request("/send-message", {"text": text})
 
 
@@ -1955,46 +1945,30 @@ def send_search_finished_to_telegram() -> None:
         return
     telegram_request("/send-message", {
         "text": (
-            "⏸ ПОШУК ЗАВЕРШЕНО\n\n"
-            f"За {SIGNAL_SEARCH_TIMEOUT_SEC // 60} хв якісний сигнал не підтверджено. "
-            f"Наступна перевірка через {SIGNAL_RETRY_DELAY_SEC // 60} хв."
+            "⏸ ПОИСК ЗАВЕРШЁН\n\n"
+            f"За {SIGNAL_SEARCH_TIMEOUT_SEC // 60} мин подтверждённый сигнал не найден. "
+            f"Следующая проверка через {SIGNAL_RETRY_DELAY_SEC // 60} мин."
         ),
     })
 
 
 def send_result_to_telegram(signal: dict[str, Any]) -> None:
     label = (
-        "✅ ВИГРАШ" if signal["result"] == "WIN"
-        else "❌ ПРОГРАШ" if signal["result"] == "LOSS"
-        else "➖ НІЧИЯ / ПОВЕРНЕННЯ" if signal["result"] == "DRAW"
-        else "⏭ НЕ ВІДБУЛОСЯ — ЦІНУ ВХОДУ НЕ ЗАФІКСОВАНО"
+        "✅ ВЫИГРЫШ" if signal["result"] == "WIN"
+        else "❌ ПРОИГРЫШ" if signal["result"] == "LOSS"
+        else "➖ НИЧЬЯ / ВОЗВРАТ" if signal["result"] == "DRAW"
+        else "⏭ НЕ СОСТОЯЛАСЬ — ЦЕНА ВХОДА НЕ ЗАФИКСИРОВАНА"
         if signal["result"] == "NOT_ENTERED"
-        else "⚠️ НЕ ВИЗНАЧЕНО"
+        else "⚠️ НЕ ОПРЕДЕЛЕНО"
     )
     text = (
-        f"📌 РЕЗУЛЬТАТ • {signal['pair']} OTC\n\n"
+        f"📌 РЕЗУЛЬТАТ • {signal['pair'].replace('/', ' ')} OTC\n\n"
         f"{label}\n"
-        f"Ціна входу: {signal.get('entry_price') or 'не зафіксовано'}\n"
-        f"Ціна закриття: {signal.get('close_price', 'немає даних')}\n"
-        f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
+        f"Цена входа: {signal.get('entry_price') or 'не зафиксирована'}\n"
+        f"Цена закрытия: {signal.get('close_price', 'нет данных')}\n"
+        f"Попытка: {signal['attempt'] + 1} из {MAX_OVERLAYS + 1}"
     )
-    image_kind = {"WIN": "win", "LOSS": "loss"}.get(signal.get("result"))
-    image_url = telegram_image_url(image_kind) if image_kind else ""
-    if image_url:
-        try:
-            delivery = telegram_request("/send-photo", {
-                "image_url": image_url,
-                "caption": text,
-                "filename": f"{image_kind}.jpg",
-            })
-        except Exception as exc:
-            log.warning(
-                "Не вдалося надіслати картинку результату %s (%s), пробую текст",
-                signal["pair"], type(exc).__name__,
-            )
-            delivery = telegram_request("/send-message", {"text": text})
-    else:
-        delivery = telegram_request("/send-message", {"text": text})
+    delivery = telegram_request("/send-message", {"text": text})
     log.info(
         "Фінальний результат %s підтверджено Telegram message_id=%s",
         signal["pair"], delivery.get("message_id", "невідомо"),
@@ -2007,28 +1981,14 @@ def send_daily_summary_to_telegram(summary_date: str, stats: dict[str, int]) -> 
     net = stats["WIN"] - stats["LOSS"]
     net_label = f"+{net}" if net > 0 else str(net)
     text = (
-        f"📊 ПІДСУМОК ДНЯ • {summary_date}\n\n"
-        f"Усього спроб: {stats['total']}\n"
-        f"✅ Виграшів: {stats['WIN']}\n"
-        f"❌ Програшів: {stats['LOSS']}\n"
-        f"➖ Нічиїх: {stats['DRAW']}\n"
-        f"⚠️ Не визначено: {stats['UNKNOWN']}\n\n"
-        f"Баланс результатів: {net_label}"
+        f"📊 ИТОГИ ДНЯ • {summary_date}\n\n"
+        f"Всего попыток: {stats['total']}\n"
+        f"✅ Выигрышей: {stats['WIN']}\n"
+        f"❌ Проигрышей: {stats['LOSS']}\n"
+        f"➖ Ничьих: {stats['DRAW']}\n"
+        f"⚠️ Не определено: {stats['UNKNOWN']}\n\n"
+        f"Баланс результатов: {net_label}"
     )
-    image_url = telegram_image_url("summary")
-    if image_url:
-        try:
-            telegram_request("/send-photo", {
-                "image_url": image_url,
-                "caption": text,
-                "filename": "daily-summary.jpg",
-            })
-            return
-        except Exception as exc:
-            log.warning(
-                "Не вдалося надіслати зображення підсумку (%s), пробую текст",
-                type(exc).__name__,
-            )
     telegram_request("/send-message", {"text": text})
 
 
@@ -2063,12 +2023,12 @@ def maybe_send_daily_summary(now: float) -> None:
 def send_market_pause_to_telegram(minutes: int, extension: bool = False) -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    prefix = "⏸ ПАУЗА ПРОДОВЖЕНА" if extension else "⏸ СИГНАЛИ ПРИЗУПИНЕНО"
+    prefix = "⏸ ПАУЗА ПРОДЛЕНА" if extension else "⏸ СИГНАЛЫ ПРИОСТАНОВЛЕНЫ"
     telegram_request("/send-message", {
         "text": (
             f"{prefix}\n\n"
-            f"Після серії з трьох невдалих угод нові сигнали зупинено на {minutes} хвилин.\n"
-            "Бот стежить за свіжими даними ринку й продовжить пошук, коли умови покращаться."
+            f"После трёх неудачных сделок новые сигналы остановлены на {minutes} мин.\n"
+            "Бот проверяет свежие данные рынка и возобновит поиск, когда условия улучшатся."
         ),
     })
 
@@ -2077,7 +2037,7 @@ def send_market_resume_to_telegram() -> None:
     if not TELEGRAM_CHAT_ID:
         return
     telegram_request("/send-message", {
-        "text": "▶️ ПОШУК ВІДНОВЛЕНО\n\nРинок показав достатній рух для відновлення пошуку сигналів.",
+        "text": "▶️ ПОИСК ВОЗОБНОВЛЁН\n\nРынок показал достаточное движение для продолжения поиска сигналов.",
     })
 
 
@@ -2086,9 +2046,9 @@ def send_startup_safety_pause_to_telegram(minutes: int) -> None:
         return
     telegram_request("/send-message", {
         "text": (
-            "⏸ ПЕРЕВІРКА ПІСЛЯ ПЕРЕЗАПУСКУ\n\n"
-            f"Нові сигнали призупинено на {minutes} хвилин. "
-            "Бот перевірить свіжі дані кількох пар і відновить пошук лише після підтвердження ринку."
+            "⏸ ПРОВЕРКА ПОСЛЕ ПЕРЕЗАПУСКА\n\n"
+            f"Новые сигналы приостановлены на {minutes} мин. "
+            "Бот проверит свежие данные нескольких пар и возобновит поиск после подтверждения рынка."
         ),
     })
 
@@ -2098,9 +2058,9 @@ def send_incomplete_series_to_telegram(signal: dict[str, Any]) -> None:
         return
     telegram_request("/send-message", {
         "text": (
-            f"⏹ СЕРІЮ ЗУПИНЕНО • {signal['pair']} OTC\n\n"
-            "Наступне перекриття не відкрито, бо завершився робочий час. "
-            "Мінус за завершену спробу вже врахований у статистиці."
+            f"⏹ СЕРИЯ ОСТАНОВЛЕНА • {signal['pair'].replace('/', ' ')} OTC\n\n"
+            "Следующий сигнал не создан: рабочее время завершилось. "
+            "Проигрыш за завершённую попытку учтён в статистике."
         ),
     })
 
@@ -2309,7 +2269,6 @@ def _generate_best_signal(excluded_pairs: Optional[set[str]] = None) -> Optional
     candidates = [result for result in analysis_pool.map(analyze_snapshot, snapshots) if result]
     best: Optional[dict[str, Any]] = max(candidates, key=lambda item: item["confidence"], default=None)
     if best:
-        best["image_base64"] = chart_png(best["snapshot"], best["direction"])
         best.pop("snapshot", None)
     return best
 
@@ -2319,9 +2278,9 @@ def send_entry_confirmation(signal: dict[str, Any]) -> None:
         return
     telegram_request("/send-message", {
         "text": (
-            f"🟢 ВХІД ПІДТВЕРДЖЕНО • {signal['pair']} OTC\n\n"
-            f"Фактична ціна входу: {signal['entry_price']}\n"
-            f"Експірація: {SIGNAL_DURATION_SEC // 60} хв"
+            f"🟢 ВХОД ПОДТВЕРЖДЁН • {signal['pair'].replace('/', ' ')} OTC\n\n"
+            f"Фактическая цена входа: {signal['entry_price']}\n"
+            f"Экспирация: {SIGNAL_DURATION_SEC // 60} мин"
         ),
     })
 
@@ -2349,10 +2308,17 @@ def evaluate_signal(signal: dict[str, Any]) -> str:
 
 
 def format_result(signal: dict[str, Any]) -> str:
+    result_label = {
+        "WIN": "ВЫИГРЫШ",
+        "LOSS": "ПРОИГРЫШ",
+        "DRAW": "НИЧЬЯ",
+        "UNKNOWN": "НЕ ОПРЕДЕЛЕНО",
+        "NOT_ENTERED": "НЕ СОСТОЯЛАСЬ",
+    }.get(signal["result"], "НЕ ОПРЕДЕЛЕНО")
     return (
-        f"📋 ПІДСУМОК • {signal['pair']} OTC\n"
-        f"{signal['result']} | вхід: {signal['entry_price']} | закриття: {signal.get('close_price', 'немає даних')}\n"
-        f"Спроба: {signal['attempt'] + 1} із {MAX_OVERLAYS + 1}"
+        f"📋 ИТОГ • {signal['pair'].replace('/', ' ')} OTC\n"
+        f"{result_label} | вход: {signal['entry_price']} | закрытие: {signal.get('close_price', 'нет данных')}\n"
+        f"Попытка: {signal['attempt'] + 1} из {MAX_OVERLAYS + 1}"
     )
 
 
