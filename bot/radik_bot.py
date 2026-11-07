@@ -41,7 +41,7 @@ REPLIT_GEMINI_MODEL = os.getenv("GEMINI_REPLIT_MODEL", "gemini-2.5-flash")
 MIN_PAYOUT = float(os.getenv("MIN_PAYOUT", "92"))
 MAX_PRICE_AGE_SEC = int(os.getenv("MAX_PRICE_AGE_SEC", "20"))
 CANDLE_TIMEOUT_SEC = int(os.getenv("CANDLE_FETCH_TIMEOUT_SEC", "12"))
-SIGNAL_DURATION_SEC = int(os.getenv("SIGNAL_DURATION_SEC", "120"))
+SIGNAL_DURATION_SEC = int(os.getenv("SIGNAL_DURATION_SEC", "300"))
 SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
 SIGNAL_RETRY_DELAY_SEC = max(30, int(os.getenv("SIGNAL_RETRY_DELAY_SEC", "300")))
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
@@ -499,7 +499,7 @@ def chart_png(snapshot: dict[str, Any], direction: str) -> str:
         image = Image.new("RGB", (1000, 520), "#101827")
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
-        draw.text((36, 28), f"{display_pair(snapshot['active'])}  •  2 MIN", fill="#f5f7fb", font=font)
+        draw.text((36, 28), f"{display_pair(snapshot['active'])}  •  {SIGNAL_DURATION_SEC // 60} MIN", fill="#f5f7fb", font=font)
         draw.text((36, 54), f"{direction}  |  entry {snapshot['price']}", fill="#6ee7b7" if direction == "ВГОРУ" else "#fb7185", font=font)
         low, high = min(closes), max(closes)
         spread = max(high - low, 1e-9)
@@ -538,40 +538,9 @@ def send_signal_to_telegram(
     if not TELEGRAM_CHAT_ID:
         log.warning("TELEGRAM_CHAT_ID не настроен, сигнал останется только в API")
         return
-    entry_at = signal.get("entry_at")
-    if entry_at:
-        entry_line = (
-            f"🕐 Вхід: з нової 1-хв свічки о {entry_time_label(entry_at)}:00 "
-            f"({SIGNAL_TIMEZONE})"
-        )
-        price_line = "💰 Ціна входу: фіксується на початку свічки"
-    else:
-        entry_line = ""
-        price_line = f"💰 Ціна входу: {signal['entry_price']}"
-    text = (
-        f"{caption_prefix}📊 СИГНАЛ • {signal['pair']} OTC\n\n"
-        f"📈 Напрямок: {signal['direction']}\n"
-        f"{price_line}\n"
-        f"{entry_line}\n"
-        f"⏱ Експірація: {SIGNAL_DURATION_SEC // 60} хв\n"
-        f"💎 Виплата: {signal['payout']:.0f}%\n"
-        f"🎯 Впевненість: {signal['confidence']}%\n\n"
-        f"📝 {signal['reason']}"
-    )
-    image_url = telegram_image_url(image_kind)
-    if image_url:
-        try:
-            telegram_request("/send-photo", {
-                "image_url": image_url,
-                "caption": text,
-                "filename": f"{image_kind}.jpg",
-            })
-            return
-        except Exception as exc:
-            log.warning(
-                "Не вдалося надіслати зображення сигналу %s (%s), пробую текст",
-                signal["pair"], type(exc).__name__,
-            )
+    pair = signal["pair"].replace("/", " ").upper()
+    direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
+    text = f"{pair} OTC {SIGNAL_DURATION_SEC // 60} Минут {direction}"
     telegram_request("/send-message", {"text": text})
 
 
@@ -1426,7 +1395,7 @@ REPLIT_GEMINI_MODEL = os.getenv("GEMINI_REPLIT_MODEL", "gemini-2.5-flash")
 MIN_PAYOUT = float(os.getenv("MIN_PAYOUT", "92"))
 MAX_PRICE_AGE_SEC = int(os.getenv("MAX_PRICE_AGE_SEC", "20"))
 CANDLE_TIMEOUT_SEC = int(os.getenv("CANDLE_FETCH_TIMEOUT_SEC", "12"))
-SIGNAL_DURATION_SEC = int(os.getenv("SIGNAL_DURATION_SEC", "120"))
+SIGNAL_DURATION_SEC = int(os.getenv("SIGNAL_DURATION_SEC", "300"))
 SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
 SIGNAL_RETRY_DELAY_SEC = max(30, int(os.getenv("SIGNAL_RETRY_DELAY_SEC", "300")))
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
@@ -1884,7 +1853,7 @@ def chart_png(snapshot: dict[str, Any], direction: str) -> str:
         image = Image.new("RGB", (1000, 520), "#101827")
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
-        draw.text((36, 28), f"{display_pair(snapshot['active'])}  •  2 MIN", fill="#f5f7fb", font=font)
+        draw.text((36, 28), f"{display_pair(snapshot['active'])}  •  {SIGNAL_DURATION_SEC // 60} MIN", fill="#f5f7fb", font=font)
         draw.text((36, 54), f"{direction}  |  entry {snapshot['price']}", fill="#6ee7b7" if direction == "ВГОРУ" else "#fb7185", font=font)
         low, high = min(closes), max(closes)
         spread = max(high - low, 1e-9)
@@ -1923,40 +1892,9 @@ def send_signal_to_telegram(
     if not TELEGRAM_CHAT_ID:
         log.warning("TELEGRAM_CHAT_ID не настроен, сигнал останется только в API")
         return
-    entry_at = signal.get("entry_at")
-    if entry_at:
-        entry_line = (
-            f"🕐 Вхід: з нової 1-хв свічки о {entry_time_label(entry_at)}:00 "
-            f"({SIGNAL_TIMEZONE})"
-        )
-        price_line = "💰 Ціна входу: фіксується на початку свічки"
-    else:
-        entry_line = ""
-        price_line = f"💰 Ціна входу: {signal['entry_price']}"
-    text = (
-        f"{caption_prefix}📊 СИГНАЛ • {signal['pair']} OTC\n\n"
-        f"📈 Напрямок: {signal['direction']}\n"
-        f"{price_line}\n"
-        f"{entry_line}\n"
-        f"⏱ Експірація: {SIGNAL_DURATION_SEC // 60} хв\n"
-        f"💎 Виплата: {signal['payout']:.0f}%\n"
-        f"🎯 Впевненість: {signal['confidence']}%\n\n"
-        f"📝 {signal['reason']}"
-    )
-    image_url = telegram_image_url(image_kind)
-    if image_url:
-        try:
-            telegram_request("/send-photo", {
-                "image_url": image_url,
-                "caption": text,
-                "filename": f"{image_kind}.jpg",
-            })
-            return
-        except Exception as exc:
-            log.warning(
-                "Не вдалося надіслати зображення сигналу %s (%s), пробую текст",
-                signal["pair"], type(exc).__name__,
-            )
+    pair = signal["pair"].replace("/", " ").upper()
+    direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
+    text = f"{pair} OTC {SIGNAL_DURATION_SEC // 60} Минут {direction}"
     telegram_request("/send-message", {"text": text})
 
 

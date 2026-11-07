@@ -339,22 +339,26 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual([request[0] for request in requests], ["/send-photo", "/send-message"])
         self.assertIn("✅ ВИГРАШ", requests[1][1]["text"])
 
-    def test_signal_uses_public_photo_url(self):
+    def test_signal_is_sent_as_one_plain_line_with_five_minute_expiry(self):
         requests = []
+        original_duration = bot.SIGNAL_DURATION_SEC
 
         def request(path, payload):
             requests.append((path, payload))
             return {"ok": True, "message_id": 125}
 
-        bot.telegram_request = request
-        bot.send_signal_to_telegram(signal(0))
+        try:
+            bot.SIGNAL_DURATION_SEC = 300
+            bot.telegram_request = request
+            current = signal(0)
+            current["pair"] = "AUD/CAD"
+            current["direction"] = "ВНИЗ"
+            bot.send_signal_to_telegram(current)
 
-        self.assertEqual([request[0] for request in requests], ["/send-photo"])
-        self.assertIn("📊 СИГНАЛ", requests[0][1]["caption"])
-        self.assertEqual(
-            requests[0][1]["image_url"],
-            "https://example.test/api/telegram-image/signal",
-        )
+            self.assertEqual([item[0] for item in requests], ["/send-message"])
+            self.assertEqual(requests[0][1]["text"], "AUD CAD OTC 5 Минут вниз")
+        finally:
+            bot.SIGNAL_DURATION_SEC = original_duration
 
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []
