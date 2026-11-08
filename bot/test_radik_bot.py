@@ -30,6 +30,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             "result_delivery_next_retry_at": bot.result_delivery_next_retry_at,
             "result_delivery_last_error": bot.result_delivery_last_error,
             "signal_searching": bot.signal_searching,
+            "last_signal_outcome": bot.last_signal_outcome,
             "next_signal_at": bot.next_signal_at,
             "pause_until": bot.market_pause_until,
             "pause_started_at": bot.market_pause_started_at,
@@ -47,6 +48,8 @@ class OverlayAndPauseTests(unittest.TestCase):
             "send_resume": bot.send_market_resume_to_telegram,
             "send_startup_pause": bot.send_startup_safety_pause_to_telegram,
             "send_incomplete": bot.send_incomplete_series_to_telegram,
+            "send_overlay_preparation": bot.send_overlay_preparation_to_telegram,
+            "send_overlay_cancelled": bot.send_overlay_cancelled_to_telegram,
             "market_snapshot": bot.market_snapshot,
             "persist_signal_state": bot.persist_signal_state,
             "telegram_request": bot.telegram_request,
@@ -59,6 +62,12 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.result_delivery_next_retry_at = 0
         bot.result_delivery_last_error = None
         bot.signal_searching = False
+        bot.last_signal_outcome = None
+        self.overlay_preparations = []
+        bot.send_overlay_preparation_to_telegram = (
+            lambda number, percent: self.overlay_preparations.append((number, percent))
+        )
+        bot.send_overlay_cancelled_to_telegram = lambda: None
         bot.market_pause_until = 0
         bot.market_pause_started_at = 0
         bot.market_pause_last_check = 0
@@ -76,6 +85,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.result_delivery_next_retry_at = self.saved["result_delivery_next_retry_at"]
         bot.result_delivery_last_error = self.saved["result_delivery_last_error"]
         bot.signal_searching = self.saved["signal_searching"]
+        bot.last_signal_outcome = self.saved["last_signal_outcome"]
         bot.next_signal_at = self.saved["next_signal_at"]
         bot.market_pause_until = self.saved["pause_until"]
         bot.market_pause_started_at = self.saved["pause_started_at"]
@@ -93,6 +103,8 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.send_market_resume_to_telegram = self.saved["send_resume"]
         bot.send_startup_safety_pause_to_telegram = self.saved["send_startup_pause"]
         bot.send_incomplete_series_to_telegram = self.saved["send_incomplete"]
+        bot.send_overlay_preparation_to_telegram = self.saved["send_overlay_preparation"]
+        bot.send_overlay_cancelled_to_telegram = self.saved["send_overlay_cancelled"]
         bot.market_snapshot = self.saved["market_snapshot"]
         bot.persist_signal_state = self.saved["persist_signal_state"]
         bot.telegram_request = self.saved["telegram_request"]
@@ -143,7 +155,8 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual(overlays[0]["direction"], "ВНИЗ")
             self.assertEqual(overlays[0]["attempt"], 1)
             self.assertEqual(overlays[0]["series_pairs"], ["EURUSD_otc", "GBPUSD_otc"])
-            self.assertEqual(len(finals), 0)
+            self.assertEqual([item["result"] for item in finals], ["LOSS"])
+            self.assertEqual(self.overlay_preparations, [(1, 2)])
             self.assertEqual([item["result"] for item in recorded], ["LOSS"])
             self.assertEqual(excluded_on_recovery, [{"EURUSD_otc"}])
 
@@ -156,17 +169,17 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual(overlays[1]["pair"], "USD/JPY")
             self.assertEqual(overlays[1]["direction"], "ВГОРУ")
             self.assertEqual(overlays[1]["attempt"], 2)
-            self.assertEqual(
-                excluded_on_recovery[1], {"EURUSD_otc", "GBPUSD_otc"}
-            )
+            self.assertEqual(excluded_on_recovery[1], {"EURUSD_otc", "GBPUSD_otc"})
+            self.assertEqual([item["result"] for item in finals], ["LOSS", "LOSS"])
+            self.assertEqual(self.overlay_preparations, [(1, 2), (2, 3)])
             self.assertEqual([item["result"] for item in recorded], ["LOSS", "LOSS"])
 
             third = deepcopy(bot.pending_signal)
             third["result"] = "LOSS"
             bot.active_signal, bot.pending_signal = third, None
             bot.handle_signal_outcome(third, "LOSS", 300)
-            self.assertEqual(len(finals), 1)
-            self.assertEqual(finals[0]["result"], "LOSS")
+            self.assertEqual(len(finals), 3)
+            self.assertEqual([item["result"] for item in finals], ["LOSS", "LOSS", "LOSS"])
             self.assertEqual([item["result"] for item in recorded], ["LOSS", "LOSS", "LOSS"])
             self.assertEqual(len(pauses), 1)
             self.assertIsNone(bot.active_signal)
@@ -307,7 +320,7 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         bot.handle_signal_outcome(current, "LOSS", 100)
 
-        self.assertEqual(finals, [])
+        self.assertEqual([item["result"] for item in finals], ["LOSS"])
         self.assertEqual([item["result"] for item in recorded], ["LOSS"])
         self.assertEqual(len(incomplete), 1)
         self.assertIsNone(bot.active_signal)
@@ -339,7 +352,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             bot.handle_signal_outcome(later, "UNKNOWN", 300)
 
             self.assertEqual([item["result"] for item in recorded], ["LOSS", "UNKNOWN"])
-            self.assertEqual([item["result"] for item in finals], ["UNKNOWN"])
+            self.assertEqual([item["result"] for item in finals], ["LOSS", "UNKNOWN"])
         finally:
             bot._generate_best_signal = original_generator
 
@@ -393,8 +406,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.send_result_to_telegram(current)
 
         self.assertEqual([request[0] for request in requests], ["/send-message"])
-        self.assertIn("✅ ВЫИГРЫШ", requests[0][1]["text"])
-        self.assertIn("Цена входа:", requests[0][1]["text"])
+        self.assertEqual(requests[0][1]["text"], "EUR/USD OTC\n+++")
 
     def test_result_never_sends_a_photo(self):
         requests = []
@@ -410,7 +422,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.send_result_to_telegram(current)
 
         self.assertEqual([request[0] for request in requests], ["/send-message"])
-        self.assertIn("✅ ВЫИГРЫШ", requests[0][1]["text"])
+        self.assertEqual(requests[0][1]["text"], "EUR/USD OTC\n+++")
 
     def test_signal_is_sent_as_one_plain_line_with_five_minute_expiry(self):
         requests = []
@@ -433,7 +445,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual([item[0] for item in requests], ["/send-message"])
             self.assertEqual(
                 requests[0][1]["text"],
-                "AUD CAD OTC\nНа 5 минут вниз\nЗаходим со следующей свечи через 40 сек.",
+                "AUD/CAD OTC\nНа 5 минут вниз\nЗахожу с новой свечи через 40 сек.",
             )
         finally:
             bot.SIGNAL_DURATION_SEC = original_duration
@@ -453,7 +465,51 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.send_search_to_telegram()
 
         self.assertEqual([path for path, _ in requests], ["/send-message"])
-        self.assertIn("ПОИСК СИГНАЛА", requests[0][1]["text"])
+        self.assertEqual(requests[0][1]["text"], "Меняю пару, ищу следующую ситуацию.")
+
+    def test_win_search_notice_says_stake_returns_to_one_percent(self):
+        requests = []
+        bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
+            "ok": True, "message_id": 127,
+        }
+        bot.last_signal_outcome = "WIN"
+
+        bot.send_search_to_telegram()
+
+        self.assertEqual(
+            requests[0][1]["text"],
+            "Меняю пару, ищу следующую ситуацию.\nВозвращаюсь на 1%.",
+        )
+        self.assertIsNone(bot.last_signal_outcome)
+
+    def test_entry_confirmation_is_only_the_word_entered(self):
+        requests = []
+        bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
+            "ok": True, "message_id": 128,
+        }
+
+        bot.send_entry_confirmation(signal(0))
+
+        self.assertEqual(requests, [("/send-message", {"text": "Зашел"})])
+
+    def test_overlay_preparation_increases_stake_percent(self):
+        requests = []
+        bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
+            "ok": True, "message_id": 129,
+        }
+
+        self.saved["send_overlay_preparation"](1, 2)
+        self.saved["send_overlay_preparation"](2, 3)
+
+        self.assertEqual(
+            [payload["text"] for _, payload in requests],
+            [
+                "Меняю пару, ищу следующую ситуацию.\n"
+                "Готовлю первое перекрытие, буду заходить на 2%.",
+                "Меняю пару, ищу следующую ситуацию.\n"
+                "Готовлю второе перекрытие, буду заходить на 3%.",
+            ],
+        )
 
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []

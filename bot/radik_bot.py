@@ -166,6 +166,7 @@ daily_stats_lock = threading.Lock()
 active_signal: Optional[dict[str, Any]] = None
 pending_signal: Optional[dict[str, Any]] = None
 signal_searching = False
+last_signal_outcome: Optional[str] = None
 next_signal_at = 0.0
 search_started_at = 0.0
 scan_cursor = 0
@@ -544,13 +545,13 @@ def send_signal_to_telegram(
     if not TELEGRAM_CHAT_ID:
         log.warning("TELEGRAM_CHAT_ID не настроен, сигнал останется только в API")
         return
-    pair = signal["pair"].replace("/", " ").upper()
+    pair = signal["pair"].replace(" ", "").replace("/", "/").upper()
     direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
     entry_at = signal.get("entry_at")
     remaining = seconds_until_entry(entry_at)
     entry_line = (
-        f"Заходим со следующей свечи через {remaining} сек."
-        if remaining is not None else "Заходим со следующей свечи."
+        f"Захожу с новой свечи через {remaining} сек."
+        if remaining is not None else "Захожу с новой свечи."
     )
     text = (
         f"{pair} OTC\n"
@@ -561,10 +562,36 @@ def send_signal_to_telegram(
 
 
 def send_search_to_telegram() -> None:
+    global last_signal_outcome
     if not TELEGRAM_CHAT_ID:
         return
-    text = "🔎 ПОИСК СИГНАЛА\n\nАнализирую рынок и жду подтверждённую ситуацию."
+    text = "Меняю пару, ищу следующую ситуацию."
+    if last_signal_outcome == "WIN":
+        text += "\nВозвращаюсь на 1%."
     telegram_request("/send-message", {"text": text})
+    last_signal_outcome = None
+
+
+def send_overlay_preparation_to_telegram(overlay_number: int, stake_percent: int) -> None:
+    if not TELEGRAM_CHAT_ID:
+        return
+    ordinal = {1: "первое", 2: "второе", 3: "третье"}.get(
+        overlay_number, f"{overlay_number}-е"
+    )
+    telegram_request("/send-message", {
+        "text": (
+            "Меняю пару, ищу следующую ситуацию.\n"
+            f"Готовлю {ordinal} перекрытие, буду заходить на {stake_percent}%."
+        ),
+    })
+
+
+def send_overlay_cancelled_to_telegram() -> None:
+    if not TELEGRAM_CHAT_ID:
+        return
+    telegram_request("/send-message", {
+        "text": "Новая ситуация не подтвердилась. Перекрытие отменено.",
+    })
 
 
 def send_search_finished_to_telegram() -> None:
@@ -580,21 +607,15 @@ def send_search_finished_to_telegram() -> None:
 
 
 def send_result_to_telegram(signal: dict[str, Any]) -> None:
-    label = (
-        "✅ ВЫИГРЫШ" if signal["result"] == "WIN"
-        else "❌ ПРОИГРЫШ" if signal["result"] == "LOSS"
-        else "➖ НИЧЬЯ / ВОЗВРАТ" if signal["result"] == "DRAW"
-        else "⏭ НЕ СОСТОЯЛАСЬ — ЦЕНА ВХОДА НЕ ЗАФИКСИРОВАНА"
-        if signal["result"] == "NOT_ENTERED"
-        else "⚠️ НЕ ОПРЕДЕЛЕНО"
-    )
-    text = (
-        f"📌 РЕЗУЛЬТАТ • {signal['pair'].replace('/', ' ')} OTC\n\n"
-        f"{label}\n"
-        f"Цена входа: {signal.get('entry_price') or 'не зафиксирована'}\n"
-        f"Цена закрытия: {signal.get('close_price', 'нет данных')}\n"
-        f"Попытка: {signal['attempt'] + 1} из {MAX_OVERLAYS + 1}"
-    )
+    pair = signal["pair"].replace(" ", "").upper()
+    label = {
+        "WIN": "+++",
+        "LOSS": "--",
+        "DRAW": "0",
+        "UNKNOWN": "Результат не определён",
+        "NOT_ENTERED": "Вход не состоялся",
+    }.get(signal["result"], "Результат не определён")
+    text = f"{pair} OTC\n{label}"
     delivery = telegram_request("/send-message", {"text": text})
     log.info(
         "Фінальний результат %s підтверджено Telegram message_id=%s",
@@ -930,13 +951,7 @@ def _generate_best_signal(excluded_pairs: Optional[set[str]] = None) -> Optional
 def send_entry_confirmation(signal: dict[str, Any]) -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    telegram_request("/send-message", {
-        "text": (
-            f"🟢 ВХОД ПОДТВЕРЖДЁН • {signal['pair'].replace('/', ' ')} OTC\n\n"
-            f"Фактическая цена входа: {signal['entry_price']}\n"
-            f"Экспирация: {SIGNAL_DURATION_SEC // 60} мин"
-        ),
-    })
+    telegram_request("/send-message", {"text": "Зашел"})
 
 
 def close_price(active: str, not_before: float = 0.0) -> float:
@@ -1545,6 +1560,7 @@ daily_stats_lock = threading.Lock()
 active_signal: Optional[dict[str, Any]] = None
 pending_signal: Optional[dict[str, Any]] = None
 signal_searching = False
+last_signal_outcome: Optional[str] = None
 next_signal_at = 0.0
 search_started_at = 0.0
 scan_cursor = 0
@@ -1917,13 +1933,13 @@ def send_signal_to_telegram(
     if not TELEGRAM_CHAT_ID:
         log.warning("TELEGRAM_CHAT_ID не настроен, сигнал останется только в API")
         return
-    pair = signal["pair"].replace("/", " ").upper()
+    pair = signal["pair"].replace(" ", "").upper()
     direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
     entry_at = signal.get("entry_at")
     remaining = seconds_until_entry(entry_at)
     entry_line = (
-        f"Заходим со следующей свечи через {remaining} сек."
-        if remaining is not None else "Заходим со следующей свечи."
+        f"Захожу с новой свечи через {remaining} сек."
+        if remaining is not None else "Захожу с новой свечи."
     )
     text = (
         f"{pair} OTC\n"
@@ -1934,10 +1950,14 @@ def send_signal_to_telegram(
 
 
 def send_search_to_telegram() -> None:
+    global last_signal_outcome
     if not TELEGRAM_CHAT_ID:
         return
-    text = "🔎 ПОИСК СИГНАЛА\n\nАнализирую рынок и жду подтверждённую ситуацию."
+    text = "Меняю пару, ищу следующую ситуацию."
+    if last_signal_outcome == "WIN":
+        text += "\nВозвращаюсь на 1%."
     telegram_request("/send-message", {"text": text})
+    last_signal_outcome = None
 
 
 def send_search_finished_to_telegram() -> None:
@@ -1945,7 +1965,7 @@ def send_search_finished_to_telegram() -> None:
         return
     telegram_request("/send-message", {
         "text": (
-            "⏸ ПОИСК ЗАВЕРШЁН\n\n"
+            "⏸ СИТУАЦИЯ НЕ НАЙДЕНА\n\n"
             f"За {SIGNAL_SEARCH_TIMEOUT_SEC // 60} мин подтверждённый сигнал не найден. "
             f"Следующая проверка через {SIGNAL_RETRY_DELAY_SEC // 60} мин."
         ),
@@ -1953,21 +1973,15 @@ def send_search_finished_to_telegram() -> None:
 
 
 def send_result_to_telegram(signal: dict[str, Any]) -> None:
-    label = (
-        "✅ ВЫИГРЫШ" if signal["result"] == "WIN"
-        else "❌ ПРОИГРЫШ" if signal["result"] == "LOSS"
-        else "➖ НИЧЬЯ / ВОЗВРАТ" if signal["result"] == "DRAW"
-        else "⏭ НЕ СОСТОЯЛАСЬ — ЦЕНА ВХОДА НЕ ЗАФИКСИРОВАНА"
-        if signal["result"] == "NOT_ENTERED"
-        else "⚠️ НЕ ОПРЕДЕЛЕНО"
-    )
-    text = (
-        f"📌 РЕЗУЛЬТАТ • {signal['pair'].replace('/', ' ')} OTC\n\n"
-        f"{label}\n"
-        f"Цена входа: {signal.get('entry_price') or 'не зафиксирована'}\n"
-        f"Цена закрытия: {signal.get('close_price', 'нет данных')}\n"
-        f"Попытка: {signal['attempt'] + 1} из {MAX_OVERLAYS + 1}"
-    )
+    pair = signal["pair"].replace(" ", "").upper()
+    label = {
+        "WIN": "+++",
+        "LOSS": "--",
+        "DRAW": "0",
+        "UNKNOWN": "Результат не определён",
+        "NOT_ENTERED": "Вход не состоялся",
+    }.get(signal["result"], "Результат не определён")
+    text = f"{pair} OTC\n{label}"
     delivery = telegram_request("/send-message", {"text": text})
     log.info(
         "Фінальний результат %s підтверджено Telegram message_id=%s",
@@ -2276,13 +2290,7 @@ def _generate_best_signal(excluded_pairs: Optional[set[str]] = None) -> Optional
 def send_entry_confirmation(signal: dict[str, Any]) -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    telegram_request("/send-message", {
-        "text": (
-            f"🟢 ВХОД ПОДТВЕРЖДЁН • {signal['pair'].replace('/', ' ')} OTC\n\n"
-            f"Фактическая цена входа: {signal['entry_price']}\n"
-            f"Экспирация: {SIGNAL_DURATION_SEC // 60} мин"
-        ),
-    })
+    telegram_request("/send-message", {"text": "Зашел"})
 
 
 def close_price(active: str, not_before: float = 0.0) -> float:
@@ -2323,7 +2331,7 @@ def format_result(signal: dict[str, Any]) -> str:
 
 
 def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> None:
-    global active_signal, pending_signal, next_signal_at, signal_searching
+    global active_signal, pending_signal, next_signal_at, signal_searching, last_signal_outcome
     log.info(
         "Результат спроби: %s %s entry=%s close=%s attempt=%s",
         signal["pair"], outcome, signal["entry_price"],
@@ -2332,8 +2340,16 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
     if outcome in {"WIN", "LOSS", "DRAW"} and not signal.get("result_recorded"):
         record_signal_result(signal)
         signal["result_recorded"] = True
+    if outcome in {"WIN", "LOSS"}:
+        last_signal_outcome = outcome
     has_overlay_left = signal["attempt"] < MAX_OVERLAYS
     if outcome == "LOSS" and has_overlay_left and in_signal_window():
+        try:
+            send_overlay_preparation_to_telegram(
+                signal["attempt"] + 1, signal["attempt"] + 2
+            )
+        except Exception as exc:
+            log.warning("Не удалось сообщить о подготовке перекрытия: %s", type(exc).__name__)
         excluded_pairs = set(signal.get("series_pairs") or [signal["raw_pair"]])
         with signal_state_lock:
             signal_searching = True
@@ -2364,6 +2380,10 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
                 "Після LOSS %s не знайдено якісної альтернативної пари; догін не створюється",
                 signal["pair"],
             )
+            try:
+                send_overlay_cancelled_to_telegram()
+            except Exception as exc:
+                log.warning("Не удалось сообщить об отмене перекрытия: %s", type(exc).__name__)
             deliver_terminal_result(signal, now)
             return
         persist_signal_state()
@@ -2373,6 +2393,10 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             signal["attempt"] + 1, MAX_OVERLAYS + 1,
             replacement["pair"],
         )
+        try:
+            send_result_to_telegram(signal)
+        except Exception as exc:
+            log.warning("Не удалось отправить результат перекрываемой сделки: %s", type(exc).__name__)
         try:
             send_signal_to_telegram(replacement)
         except Exception as exc:
@@ -2385,6 +2409,10 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             "результат спроби враховано, нове перекриття не створено",
             signal["pair"],
         )
+        try:
+            send_result_to_telegram(signal)
+        except Exception as exc:
+            log.warning("Не удалось отправить результат сделки: %s", type(exc).__name__)
         try:
             send_incomplete_series_to_telegram(signal)
         except Exception as exc:
