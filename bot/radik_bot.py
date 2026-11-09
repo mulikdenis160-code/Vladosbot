@@ -469,22 +469,31 @@ def result_day(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
 
 
-def record_signal_result(signal: dict[str, Any]) -> None:
+def record_signal_result(
+    signal: dict[str, Any], outcome: Optional[str] = None, result_at: Optional[float] = None
+) -> None:
     global daily_stats_date, daily_stats
-    timestamp = float(signal.get("entry_at") or signal.get("created_at") or time.time())
+    if signal.get("series_result_recorded"):
+        return
+    outcome = outcome or signal.get("result", "LOSS")
+    if outcome not in {"WIN", "LOSS"}:
+        return
+    timestamp = float(result_at or time.time())
     day = result_day(timestamp)
-    outcome = signal.get("result", "UNKNOWN")
-    if outcome not in {"WIN", "LOSS", "DRAW", "UNKNOWN"}:
-        outcome = "UNKNOWN"
     with daily_stats_lock:
         if day != daily_stats_date:
             daily_stats_date = day
             daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
         daily_stats["total"] += 1
         daily_stats[outcome] += 1
+    signal["series_result_recorded"] = True
 
 
 def telegram_request(path: str, payload: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
+    if path == "/send-message" and isinstance(payload.get("text"), str):
+        payload = {**payload, "text": payload["text"].rstrip()}
+        if payload["text"].endswith("."):
+            payload["text"] = payload["text"][:-1]
     response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
     response.raise_for_status()
     result = response.json()
@@ -963,7 +972,7 @@ def evaluate_signal(signal: dict[str, Any]) -> str:
         price = close_price(signal["raw_pair"], signal["expires_at"])
         signal["close_price"] = price
         if math.isclose(price, signal["entry_price"], rel_tol=0.0, abs_tol=1e-10):
-            signal["result"] = "DRAW"
+            signal["result"] = "LOSS"
         elif signal["direction"] == "ВГОРУ":
             signal["result"] = "WIN" if price > signal["entry_price"] else "LOSS"
         else:
@@ -1863,22 +1872,31 @@ def result_day(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
 
 
-def record_signal_result(signal: dict[str, Any]) -> None:
+def record_signal_result(
+    signal: dict[str, Any], outcome: Optional[str] = None, result_at: Optional[float] = None
+) -> None:
     global daily_stats_date, daily_stats
-    timestamp = float(signal.get("entry_at") or signal.get("created_at") or time.time())
+    if signal.get("series_result_recorded"):
+        return
+    outcome = outcome or signal.get("result", "LOSS")
+    if outcome not in {"WIN", "LOSS"}:
+        return
+    timestamp = float(result_at or time.time())
     day = result_day(timestamp)
-    outcome = signal.get("result", "UNKNOWN")
-    if outcome not in {"WIN", "LOSS", "DRAW", "UNKNOWN"}:
-        outcome = "UNKNOWN"
     with daily_stats_lock:
         if day != daily_stats_date:
             daily_stats_date = day
             daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
         daily_stats["total"] += 1
         daily_stats[outcome] += 1
+    signal["series_result_recorded"] = True
 
 
 def telegram_request(path: str, payload: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
+    if path == "/send-message" and isinstance(payload.get("text"), str):
+        payload = {**payload, "text": payload["text"].rstrip()}
+        if payload["text"].endswith("."):
+            payload["text"] = payload["text"][:-1]
     response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
     response.raise_for_status()
     result = response.json()
@@ -1974,13 +1992,14 @@ def send_search_finished_to_telegram() -> None:
 
 def send_result_to_telegram(signal: dict[str, Any]) -> None:
     pair = signal["pair"].replace(" ", "").upper()
+    if signal.get("result") == "UNKNOWN":
+        raise ValueError("Нельзя отправить итог без подтверждённой цены закрытия")
     label = {
         "WIN": "+++",
         "LOSS": "--",
-        "DRAW": "0",
-        "UNKNOWN": "Результат не определён",
+        "DRAW": "--",
         "NOT_ENTERED": "Вход не состоялся",
-    }.get(signal["result"], "Результат не определён")
+    }.get(signal.get("result"), "--")
     text = f"{pair} OTC\n{label}"
     delivery = telegram_request("/send-message", {"text": text})
     log.info(
