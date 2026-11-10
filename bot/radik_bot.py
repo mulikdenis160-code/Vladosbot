@@ -491,9 +491,7 @@ def record_signal_result(
 
 def telegram_request(path: str, payload: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
     if path == "/send-message" and isinstance(payload.get("text"), str):
-        payload = {**payload, "text": payload["text"].rstrip()}
-        if payload["text"].endswith("."):
-            payload["text"] = payload["text"][:-1]
+        payload = {**payload, "text": payload["text"].rstrip().rstrip(".").rstrip()}
     response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
     response.raise_for_status()
     result = response.json()
@@ -617,13 +615,14 @@ def send_search_finished_to_telegram() -> None:
 
 def send_result_to_telegram(signal: dict[str, Any]) -> None:
     pair = signal["pair"].replace(" ", "").upper()
+    if signal.get("result") == "UNKNOWN":
+        raise ValueError("Нельзя отправить итог без подтверждённой цены закрытия")
     label = {
         "WIN": "+++",
         "LOSS": "--",
-        "DRAW": "0",
-        "UNKNOWN": "Результат не определён",
+        "DRAW": "--",
         "NOT_ENTERED": "Вход не состоялся",
-    }.get(signal["result"], "Результат не определён")
+    }.get(signal.get("result"), "--")
     text = f"{pair} OTC\n{label}"
     delivery = telegram_request("/send-message", {"text": text})
     log.info(
@@ -639,11 +638,9 @@ def send_daily_summary_to_telegram(summary_date: str, stats: dict[str, int]) -> 
     net_label = f"+{net}" if net > 0 else str(net)
     text = (
         f"📊 ИТОГИ ДНЯ • {summary_date}\n\n"
-        f"Всего попыток: {stats['total']}\n"
+        f"Всего серий: {stats['total']}\n"
         f"✅ Выигрышей: {stats['WIN']}\n"
         f"❌ Проигрышей: {stats['LOSS']}\n"
-        f"➖ Ничьих: {stats['DRAW']}\n"
-        f"⚠️ Не определено: {stats['UNKNOWN']}\n\n"
         f"Баланс результатов: {net_label}"
     )
     telegram_request("/send-message", {"text": text})
@@ -665,9 +662,9 @@ def maybe_send_daily_summary(now: float) -> None:
             daily_stats_date = summary_date
             daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
         stats = dict(daily_stats)
-        daily_summary_sent_date = summary_date
     try:
         send_daily_summary_to_telegram(summary_date, stats)
+        daily_summary_sent_date = summary_date
         log.info(
             "Денний підсумок надіслано: %s total=%s win=%s loss=%s draw=%s unknown=%s",
             summary_date, stats["total"], stats["WIN"], stats["LOSS"],
@@ -989,10 +986,10 @@ def format_result(signal: dict[str, Any]) -> str:
     result_label = {
         "WIN": "ВЫИГРЫШ",
         "LOSS": "ПРОИГРЫШ",
-        "DRAW": "НИЧЬЯ",
-        "UNKNOWN": "НЕ ОПРЕДЕЛЕНО",
+        "DRAW": "ПРОИГРЫШ",
+        "UNKNOWN": "ПРОВЕРЯЮ ЦЕНУ",
         "NOT_ENTERED": "НЕ СОСТОЯЛАСЬ",
-    }.get(signal["result"], "НЕ ОПРЕДЕЛЕНО")
+    }.get(signal["result"], "ПРОВЕРЯЮ ЦЕНУ")
     return (
         f"📋 ИТОГ • {signal['pair'].replace('/', ' ')} OTC\n"
         f"{result_label} | вход: {signal['entry_price']} | закрытие: {signal.get('close_price', 'нет данных')}\n"
@@ -1007,9 +1004,16 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         signal["pair"], outcome, signal["entry_price"],
         signal.get("close_price", "немає даних"), signal["attempt"] + 1,
     )
-    if outcome in {"WIN", "LOSS", "DRAW"} and not signal.get("result_recorded"):
-        record_signal_result(signal)
-        signal["result_recorded"] = True
+    if outcome == "DRAW":
+        outcome = "LOSS"
+        signal["result"] = "LOSS"
+    if outcome == "UNKNOWN":
+        signal["expires_at"] = now + 5
+        with signal_state_lock:
+            active_signal = signal
+        persist_signal_state()
+        log.warning("Результат пока не подтверждён свежей ценой; повторная проверка через 5 секунд")
+        return
     has_overlay_left = signal["attempt"] < MAX_OVERLAYS
     if outcome == "LOSS" and has_overlay_left and in_signal_window():
         excluded_pairs = set(signal.get("series_pairs") or [signal["raw_pair"]])
@@ -1029,6 +1033,10 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
 
         if replacement:
             replacement["attempt"] = signal["attempt"] + 1
+            replacement["series_result_recorded"] = signal.get("series_result_recorded", False)
+            replacement["series_started_at"] = signal.get(
+                "series_started_at", signal.get("created_at", now)
+            )
             replacement["series_pairs"] = [
                 *sorted(excluded_pairs), replacement["raw_pair"],
             ]
@@ -1042,6 +1050,7 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
                 "Після LOSS %s не знайдено якісної альтернативної пари; догін не створюється",
                 signal["pair"],
             )
+            record_signal_result(signal, "LOSS", now)
             deliver_terminal_result(signal, now)
             return
         persist_signal_state()
@@ -1069,13 +1078,12 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             log.warning("Не вдалося повідомити про незавершену серію: %s", type(exc).__name__)
         with signal_state_lock:
             active_signal = None
+        record_signal_result(signal, "LOSS", now)
         persist_signal_state()
         next_signal_at = now + 2
         maybe_send_daily_summary(now)
         return
-    if not signal.get("result_recorded"):
-        record_signal_result(signal)
-        signal["result_recorded"] = True
+    record_signal_result(signal, outcome, now)
     if outcome == "LOSS" and not has_overlay_left:
         start_market_pause(now, signal)
     deliver_terminal_result(signal, now)
@@ -1160,6 +1168,8 @@ def finalize_pending_signal(
     global active_signal, pending_signal, next_signal_at
     signal["result"] = "NOT_ENTERED"
     signal["result_error"] = reason
+    if signal.get("attempt", 0) > 0:
+        record_signal_result(signal, "LOSS", now)
     log.warning(
         "Сигнал %s не активовано: %s; у статистику угод не додається",
         signal["pair"], reason,
@@ -1894,9 +1904,7 @@ def record_signal_result(
 
 def telegram_request(path: str, payload: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
     if path == "/send-message" and isinstance(payload.get("text"), str):
-        payload = {**payload, "text": payload["text"].rstrip()}
-        if payload["text"].endswith("."):
-            payload["text"] = payload["text"][:-1]
+        payload = {**payload, "text": payload["text"].rstrip().rstrip(".").rstrip()}
     response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
     response.raise_for_status()
     result = response.json()
@@ -2015,11 +2023,9 @@ def send_daily_summary_to_telegram(summary_date: str, stats: dict[str, int]) -> 
     net_label = f"+{net}" if net > 0 else str(net)
     text = (
         f"📊 ИТОГИ ДНЯ • {summary_date}\n\n"
-        f"Всего попыток: {stats['total']}\n"
+        f"Всего серий: {stats['total']}\n"
         f"✅ Выигрышей: {stats['WIN']}\n"
         f"❌ Проигрышей: {stats['LOSS']}\n"
-        f"➖ Ничьих: {stats['DRAW']}\n"
-        f"⚠️ Не определено: {stats['UNKNOWN']}\n\n"
         f"Баланс результатов: {net_label}"
     )
     telegram_request("/send-message", {"text": text})
@@ -2041,9 +2047,9 @@ def maybe_send_daily_summary(now: float) -> None:
             daily_stats_date = summary_date
             daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
         stats = dict(daily_stats)
-        daily_summary_sent_date = summary_date
     try:
         send_daily_summary_to_telegram(summary_date, stats)
+        daily_summary_sent_date = summary_date
         log.info(
             "Денний підсумок надіслано: %s total=%s win=%s loss=%s draw=%s unknown=%s",
             summary_date, stats["total"], stats["WIN"], stats["LOSS"],
@@ -2321,7 +2327,7 @@ def evaluate_signal(signal: dict[str, Any]) -> str:
         price = close_price(signal["raw_pair"], signal["expires_at"])
         signal["close_price"] = price
         if math.isclose(price, signal["entry_price"], rel_tol=0.0, abs_tol=1e-10):
-            signal["result"] = "DRAW"
+            signal["result"] = "LOSS"
         elif signal["direction"] == "ВГОРУ":
             signal["result"] = "WIN" if price > signal["entry_price"] else "LOSS"
         else:
@@ -2338,10 +2344,10 @@ def format_result(signal: dict[str, Any]) -> str:
     result_label = {
         "WIN": "ВЫИГРЫШ",
         "LOSS": "ПРОИГРЫШ",
-        "DRAW": "НИЧЬЯ",
-        "UNKNOWN": "НЕ ОПРЕДЕЛЕНО",
+        "DRAW": "ПРОИГРЫШ",
+        "UNKNOWN": "ПРОВЕРЯЮ ЦЕНУ",
         "NOT_ENTERED": "НЕ СОСТОЯЛАСЬ",
-    }.get(signal["result"], "НЕ ОПРЕДЕЛЕНО")
+    }.get(signal["result"], "ПРОВЕРЯЮ ЦЕНУ")
     return (
         f"📋 ИТОГ • {signal['pair'].replace('/', ' ')} OTC\n"
         f"{result_label} | вход: {signal['entry_price']} | закрытие: {signal.get('close_price', 'нет данных')}\n"
@@ -2356,9 +2362,19 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         signal["pair"], outcome, signal["entry_price"],
         signal.get("close_price", "немає даних"), signal["attempt"] + 1,
     )
-    if outcome in {"WIN", "LOSS", "DRAW"} and not signal.get("result_recorded"):
-        record_signal_result(signal)
-        signal["result_recorded"] = True
+    if outcome == "DRAW":
+        outcome = "LOSS"
+        signal["result"] = "LOSS"
+    if outcome == "UNKNOWN":
+        signal["expires_at"] = now + 5
+        with signal_state_lock:
+            active_signal = signal
+        persist_signal_state()
+        log.warning(
+            "Результат %s пока не подтверждён свежей ценой; проверка повторится через 5 секунд",
+            signal["pair"],
+        )
+        return
     if outcome in {"WIN", "LOSS"}:
         last_signal_outcome = outcome
     has_overlay_left = signal["attempt"] < MAX_OVERLAYS
@@ -2386,6 +2402,10 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
 
         if replacement:
             replacement["attempt"] = signal["attempt"] + 1
+            replacement["series_result_recorded"] = signal.get("series_result_recorded", False)
+            replacement["series_started_at"] = signal.get(
+                "series_started_at", signal.get("created_at", now)
+            )
             replacement["series_pairs"] = [
                 *sorted(excluded_pairs), replacement["raw_pair"],
             ]
@@ -2399,6 +2419,7 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
                 "Після LOSS %s не знайдено якісної альтернативної пари; догін не створюється",
                 signal["pair"],
             )
+            record_signal_result(signal, "LOSS", now)
             try:
                 send_overlay_cancelled_to_telegram()
             except Exception as exc:
@@ -2438,13 +2459,12 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             log.warning("Не вдалося повідомити про незавершену серію: %s", type(exc).__name__)
         with signal_state_lock:
             active_signal = None
+        record_signal_result(signal, "LOSS", now)
         persist_signal_state()
         next_signal_at = now + 2
         maybe_send_daily_summary(now)
         return
-    if not signal.get("result_recorded"):
-        record_signal_result(signal)
-        signal["result_recorded"] = True
+    record_signal_result(signal, outcome, now)
     if outcome == "LOSS" and not has_overlay_left:
         start_market_pause(now, signal)
     deliver_terminal_result(signal, now)
@@ -2529,6 +2549,8 @@ def finalize_pending_signal(
     global active_signal, pending_signal, next_signal_at
     signal["result"] = "NOT_ENTERED"
     signal["result_error"] = reason
+    if signal.get("attempt", 0) > 0:
+        record_signal_result(signal, "LOSS", now)
     log.warning(
         "Сигнал %s не активовано: %s; у статистику угод не додається",
         signal["pair"], reason,

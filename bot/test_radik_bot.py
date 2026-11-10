@@ -142,7 +142,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.schedule_signal_entry = lambda value: {**value, "entry_at": 200, "expires_at": None}
         bot.send_signal_to_telegram = lambda value, *args, **kwargs: overlays.append(deepcopy(value))
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
-        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+        bot.record_signal_result = lambda value, *args: recorded.append(
+            {**deepcopy(value), "result": args[0] if args else value["result"]}
+        )
         bot.start_market_pause = lambda now, value: pauses.append((now, deepcopy(value)))
         bot._generate_best_signal = generate_recovery
 
@@ -157,7 +159,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual(overlays[0]["series_pairs"], ["EURUSD_otc", "GBPUSD_otc"])
             self.assertEqual([item["result"] for item in finals], ["LOSS"])
             self.assertEqual(self.overlay_preparations, [(1, 2)])
-            self.assertEqual([item["result"] for item in recorded], ["LOSS"])
+            self.assertEqual(recorded, [])
             self.assertEqual(excluded_on_recovery, [{"EURUSD_otc"}])
 
             second = deepcopy(bot.pending_signal)
@@ -172,7 +174,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual(excluded_on_recovery[1], {"EURUSD_otc", "GBPUSD_otc"})
             self.assertEqual([item["result"] for item in finals], ["LOSS", "LOSS"])
             self.assertEqual(self.overlay_preparations, [(1, 2), (2, 3)])
-            self.assertEqual([item["result"] for item in recorded], ["LOSS", "LOSS"])
+            self.assertEqual(recorded, [])
 
             third = deepcopy(bot.pending_signal)
             third["result"] = "LOSS"
@@ -180,7 +182,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             bot.handle_signal_outcome(third, "LOSS", 300)
             self.assertEqual(len(finals), 3)
             self.assertEqual([item["result"] for item in finals], ["LOSS", "LOSS", "LOSS"])
-            self.assertEqual([item["result"] for item in recorded], ["LOSS", "LOSS", "LOSS"])
+            self.assertEqual([item["result"] for item in recorded], ["LOSS"])
             self.assertEqual(len(pauses), 1)
             self.assertIsNone(bot.active_signal)
         finally:
@@ -191,7 +193,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.in_signal_window = lambda: True
         bot._generate_best_signal = lambda excluded_pairs=None: None
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
-        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+        bot.record_signal_result = lambda value, *args: recorded.append(
+            {**deepcopy(value), "result": args[0] if args else value["result"]}
+        )
 
         current = signal(0)
         bot.active_signal = current
@@ -217,6 +221,39 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(first, ["GBPUSD_otc"])
         self.assertEqual(second, ["USDJPY_otc"])
         self.assertEqual(none, [])
+
+    def test_three_series_losses_count_as_one_daily_loss(self):
+        previous_date, previous_stats = bot.daily_stats_date, bot.daily_stats
+        try:
+            bot.daily_stats_date = bot.result_day(100)
+            bot.daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
+            completed_series = signal(2)
+            bot.record_signal_result(completed_series, "LOSS", 100)
+            bot.record_signal_result(completed_series, "LOSS", 100)
+
+            self.assertEqual(bot.daily_stats["total"], 1)
+            self.assertEqual(bot.daily_stats["LOSS"], 1)
+        finally:
+            bot.daily_stats_date, bot.daily_stats = previous_date, previous_stats
+
+    def test_telegram_messages_drop_trailing_periods(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"ok": True}
+
+        with patch("bot.radik_bot.requests.post", return_value=Response()) as post:
+            bot.telegram_request("/send-message", {"text": "Текст сообщения..."})
+
+        self.assertEqual(post.call_args.kwargs["json"]["text"], "Текст сообщения")
+
+    def test_equal_close_price_is_counted_as_loss_not_unknown_or_draw(self):
+        current = signal(0)
+        with patch.object(bot, "close_price", return_value=current["entry_price"]):
+            self.assertEqual(bot.evaluate_signal(current), "LOSS")
+            self.assertEqual(current["result"], "LOSS")
 
     def test_pause_extends_for_flat_market(self):
         messages = []
@@ -313,7 +350,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         finals, recorded, incomplete = [], [], []
         bot.in_signal_window = lambda: False
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
-        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+        bot.record_signal_result = lambda value, *args: recorded.append(
+            {**deepcopy(value), "result": args[0] if args else value["result"]}
+        )
         bot.send_incomplete_series_to_telegram = lambda value: incomplete.append(deepcopy(value))
         current = signal(0)
         bot.active_signal = current
@@ -332,7 +371,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.schedule_signal_entry = lambda value: {**value, "entry_at": 200, "expires_at": None}
         bot.send_signal_to_telegram = lambda *args, **kwargs: None
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
-        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+        bot.record_signal_result = lambda value, *args: recorded.append(
+            {**deepcopy(value), "result": args[0] if args else value["result"]}
+        )
         bot._generate_best_signal = lambda excluded_pairs=None: {
             **signal(0),
             "pair": "GBP/USD",
@@ -351,15 +392,19 @@ class OverlayAndPauseTests(unittest.TestCase):
             bot.active_signal, bot.pending_signal = later, None
             bot.handle_signal_outcome(later, "UNKNOWN", 300)
 
-            self.assertEqual([item["result"] for item in recorded], ["LOSS", "UNKNOWN"])
-            self.assertEqual([item["result"] for item in finals], ["LOSS", "UNKNOWN"])
+            self.assertEqual(recorded, [])
+            self.assertEqual([item["result"] for item in finals], ["LOSS"])
+            self.assertIs(bot.active_signal, later)
+            self.assertEqual(later["expires_at"], 305)
         finally:
             bot._generate_best_signal = original_generator
 
     def test_unentered_signal_gets_terminal_unknown_before_new_search(self):
         finals, recorded = [], []
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
-        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+        bot.record_signal_result = lambda value, *args: recorded.append(
+            {**deepcopy(value), "result": args[0] if args else value["result"]}
+        )
         current = signal(0)
         bot.pending_signal = current
 
@@ -374,7 +419,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         current = signal(2)
         current["result"] = "WIN"
         sent, recorded = [], []
-        bot.record_signal_result = lambda value: recorded.append(deepcopy(value))
+        bot.record_signal_result = lambda value, *args: recorded.append(
+            {**deepcopy(value), "result": args[0] if args else value["result"]}
+        )
 
         def unavailable(_value):
             raise ConnectionError("telegram unavailable")
@@ -514,7 +561,7 @@ class OverlayAndPauseTests(unittest.TestCase):
     def test_non_loss_results_do_not_create_pause(self):
         finals, pauses = [], []
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
-        bot.record_signal_result = lambda value: None
+        bot.record_signal_result = lambda value, *args: None
         bot.start_market_pause = lambda now, value: pauses.append((now, deepcopy(value)))
 
         for outcome in ("WIN", "DRAW", "UNKNOWN"):
@@ -523,8 +570,9 @@ class OverlayAndPauseTests(unittest.TestCase):
             bot.active_signal = current
             bot.handle_signal_outcome(current, outcome, 100)
 
-        self.assertEqual([item["result"] for item in finals], ["WIN", "DRAW", "UNKNOWN"])
-        self.assertEqual(pauses, [])
+        self.assertEqual([item["result"] for item in finals], ["WIN", "LOSS"])
+        self.assertEqual(len(pauses), 1)
+        self.assertEqual(pauses[0][0], 100)
 
     def test_search_is_blocked_while_a_series_or_search_is_active(self):
         calls = []
