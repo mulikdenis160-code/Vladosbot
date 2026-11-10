@@ -41,7 +41,7 @@ REPLIT_GEMINI_MODEL = os.getenv("GEMINI_REPLIT_MODEL", "gemini-2.5-flash")
 MIN_PAYOUT = float(os.getenv("MIN_PAYOUT", "92"))
 MAX_PRICE_AGE_SEC = int(os.getenv("MAX_PRICE_AGE_SEC", "20"))
 CANDLE_TIMEOUT_SEC = int(os.getenv("CANDLE_FETCH_TIMEOUT_SEC", "12"))
-SIGNAL_DURATION_SEC = int(os.getenv("SIGNAL_DURATION_SEC", "300"))
+SIGNAL_DURATION_SEC = 2 * 60
 SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
 SIGNAL_RETRY_DELAY_SEC = max(30, int(os.getenv("SIGNAL_RETRY_DELAY_SEC", "300")))
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
@@ -469,6 +469,19 @@ def result_day(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
 
 
+def signal_duration_label() -> str:
+    minutes = SIGNAL_DURATION_SEC // 60
+    last_two = minutes % 100
+    last_digit = minutes % 10
+    if last_two == 1:
+        unit = "минута"
+    elif 2 <= last_digit <= 4 and not 12 <= last_two <= 14:
+        unit = "минуты"
+    else:
+        unit = "минут"
+    return f"{minutes} {unit}"
+
+
 def record_signal_result(
     signal: dict[str, Any], outcome: Optional[str] = None, result_at: Optional[float] = None
 ) -> None:
@@ -562,7 +575,7 @@ def send_signal_to_telegram(
     )
     text = (
         f"{pair} OTC\n"
-        f"На {SIGNAL_DURATION_SEC // 60} минут {direction}\n"
+        f"На {signal_duration_label()} {direction}\n"
         f"{entry_line}"
     )
     telegram_request("/send-message", {"text": text})
@@ -1454,7 +1467,7 @@ REPLIT_GEMINI_MODEL = os.getenv("GEMINI_REPLIT_MODEL", "gemini-2.5-flash")
 MIN_PAYOUT = float(os.getenv("MIN_PAYOUT", "92"))
 MAX_PRICE_AGE_SEC = int(os.getenv("MAX_PRICE_AGE_SEC", "20"))
 CANDLE_TIMEOUT_SEC = int(os.getenv("CANDLE_FETCH_TIMEOUT_SEC", "12"))
-SIGNAL_DURATION_SEC = int(os.getenv("SIGNAL_DURATION_SEC", "300"))
+SIGNAL_DURATION_SEC = 2 * 60
 SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
 SIGNAL_RETRY_DELAY_SEC = max(30, int(os.getenv("SIGNAL_RETRY_DELAY_SEC", "300")))
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
@@ -1969,7 +1982,7 @@ def send_signal_to_telegram(
     )
     text = (
         f"{pair} OTC\n"
-        f"На {SIGNAL_DURATION_SEC // 60} минут {direction}\n"
+        f"На {signal_duration_label()} {direction}\n"
         f"{entry_line}"
     )
     telegram_request("/send-message", {"text": text})

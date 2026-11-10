@@ -471,7 +471,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual([request[0] for request in requests], ["/send-message"])
         self.assertEqual(requests[0][1]["text"], "EUR/USD OTC\n+++")
 
-    def test_signal_is_sent_as_one_plain_line_with_five_minute_expiry(self):
+    def test_signal_is_sent_as_one_plain_line_with_two_minute_expiry(self):
         requests = []
         original_duration = bot.SIGNAL_DURATION_SEC
 
@@ -480,7 +480,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             return {"ok": True, "message_id": 125}
 
         try:
-            bot.SIGNAL_DURATION_SEC = 300
+            bot.SIGNAL_DURATION_SEC = 120
             bot.telegram_request = request
             current = signal(0)
             current["pair"] = "AUD/CAD"
@@ -492,7 +492,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual([item[0] for item in requests], ["/send-message"])
             self.assertEqual(
                 requests[0][1]["text"],
-                "AUD/CAD OTC\nНа 5 минут вниз\nЗахожу с новой свечи через 40 сек.",
+                "AUD/CAD OTC\nНа 2 минуты вниз\nЗахожу с новой свечи через 40 сек.",
             )
         finally:
             bot.SIGNAL_DURATION_SEC = original_duration
