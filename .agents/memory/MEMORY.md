@@ -1,7 +1,7 @@
 - [Gemini signal-analysis limits](gemini-rate-limits.md) — back off after temporary Gemini quota responses; do not burst retries during signal search.
 - [Replit Gemini proxy](replit-gemini-proxy.md) — uses the proxy `/models` route and explicit Gemini message roles.
 - [Pocket Option price freshness](pocket-option-live-prices.md) — refresh pair history for entry and expiry; stale cached ticks must never trigger overlays.
-- [Market pause policy](market-pause-policy.md) — only third failed attempt is final; resume paused signals only after a fresh recovery check.
+- [Market pause policy](market-pause-policy.md) — third failed attempt is final, but a final loss must not trigger a 20-minute pause.
 - [PocketOptionAPI native crash](pocket-option-native-crash.md) — serialize all `api` calls behind one lock; production run command must auto-restart on process exit.
 - [Telegram media fallback](telegram-media-fallback.md) — Replit's Telegram proxy may reject multipart photos; every user-visible signal needs a text fallback.
 - [Single active signal scheduler](single-active-signal-scheduler.md) — keep the standby deployment stopped until the current Pocket Option scanner is paused.

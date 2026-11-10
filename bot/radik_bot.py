@@ -1103,8 +1103,6 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         maybe_send_daily_summary(now)
         return
     record_signal_result(signal, outcome, now)
-    if outcome == "LOSS" and not has_overlay_left:
-        start_market_pause(now, signal)
     deliver_terminal_result(signal, now)
 
 
@@ -2490,8 +2488,6 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         maybe_send_daily_summary(now)
         return
     record_signal_result(signal, outcome, now)
-    if outcome == "LOSS" and not has_overlay_left:
-        start_market_pause(now, signal)
     deliver_terminal_result(signal, now)
 
 

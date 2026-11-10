@@ -183,7 +183,8 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual(len(finals), 3)
             self.assertEqual([item["result"] for item in finals], ["LOSS", "LOSS", "LOSS"])
             self.assertEqual([item["result"] for item in recorded], ["LOSS"])
-            self.assertEqual(len(pauses), 1)
+            self.assertEqual(pauses, [])
+            self.assertEqual(bot.market_pause_until, 0)
             self.assertIsNone(bot.active_signal)
         finally:
             bot._generate_best_signal = original_generator
@@ -558,21 +559,20 @@ class OverlayAndPauseTests(unittest.TestCase):
             ],
         )
 
-    def test_non_loss_results_do_not_create_pause(self):
+    def test_terminal_loss_does_not_create_market_pause(self):
         finals, pauses = [], []
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
         bot.record_signal_result = lambda value, *args: None
         bot.start_market_pause = lambda now, value: pauses.append((now, deepcopy(value)))
 
-        for outcome in ("WIN", "DRAW", "UNKNOWN"):
-            current = signal(2)
-            current["result"] = outcome
-            bot.active_signal = current
-            bot.handle_signal_outcome(current, outcome, 100)
+        current = signal(2)
+        current["result"] = "LOSS"
+        bot.active_signal = current
+        bot.handle_signal_outcome(current, "LOSS", 100)
 
-        self.assertEqual([item["result"] for item in finals], ["WIN", "LOSS"])
-        self.assertEqual(len(pauses), 1)
-        self.assertEqual(pauses[0][0], 100)
+        self.assertEqual([item["result"] for item in finals], ["LOSS"])
+        self.assertEqual(pauses, [])
+        self.assertEqual(bot.market_pause_until, 0)
 
     def test_search_is_blocked_while_a_series_or_search_is_active(self):
         calls = []
