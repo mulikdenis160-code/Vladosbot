@@ -73,6 +73,7 @@ TELEGRAM_PUBLIC_BASE_URL = os.getenv("TELEGRAM_PUBLIC_BASE_URL", "").rstrip("/")
 SIGNAL_TIMEZONE = os.getenv("SIGNAL_TIMEZONE", "Europe/Kyiv")
 SIGNAL_START = clock_time.fromisoformat(os.getenv("SIGNAL_START_HOUR", "09:00"))
 SIGNAL_END = clock_time.fromisoformat(os.getenv("SIGNAL_END_HOUR", "23:00"))
+RADIK_SESSION_DATE = os.getenv("RADIK_SESSION_DATE", "").strip()
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 TELEGRAM_IMAGES = {
     "signal": ASSET_DIR / "signal.jpg",
@@ -428,7 +429,10 @@ def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def in_signal_window() -> bool:
-    now = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).time()
+    now_datetime = datetime.now(ZoneInfo(SIGNAL_TIMEZONE))
+    if RADIK_SESSION_DATE and now_datetime.date().isoformat() != RADIK_SESSION_DATE:
+        return False
+    now = now_datetime.time()
     if SIGNAL_START <= SIGNAL_END:
         return SIGNAL_START <= now < SIGNAL_END
     return now >= SIGNAL_START or now < SIGNAL_END
@@ -668,6 +672,8 @@ def maybe_send_daily_summary(now: float) -> None:
         if active_signal is not None or pending_signal is not None:
             return
     summary_date = local_now.date().isoformat()
+    if RADIK_SESSION_DATE and summary_date != RADIK_SESSION_DATE:
+        return
     with daily_stats_lock:
         if daily_summary_sent_date == summary_date:
             return
@@ -1499,6 +1505,7 @@ TELEGRAM_PUBLIC_BASE_URL = os.getenv("TELEGRAM_PUBLIC_BASE_URL", "").rstrip("/")
 SIGNAL_TIMEZONE = os.getenv("SIGNAL_TIMEZONE", "Europe/Kyiv")
 SIGNAL_START = clock_time.fromisoformat(os.getenv("SIGNAL_START_HOUR", "09:00"))
 SIGNAL_END = clock_time.fromisoformat(os.getenv("SIGNAL_END_HOUR", "23:00"))
+RADIK_SESSION_DATE = os.getenv("RADIK_SESSION_DATE", "").strip()
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 TELEGRAM_IMAGES = {
     "signal": ASSET_DIR / "signal.jpg",
@@ -1854,7 +1861,10 @@ def gemini_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def in_signal_window() -> bool:
-    now = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).time()
+    now_datetime = datetime.now(ZoneInfo(SIGNAL_TIMEZONE))
+    if RADIK_SESSION_DATE and now_datetime.date().isoformat() != RADIK_SESSION_DATE:
+        return False
+    now = now_datetime.time()
     if SIGNAL_START <= SIGNAL_END:
         return SIGNAL_START <= now < SIGNAL_END
     return now >= SIGNAL_START or now < SIGNAL_END
@@ -2053,6 +2063,8 @@ def maybe_send_daily_summary(now: float) -> None:
         if active_signal is not None or pending_signal is not None:
             return
     summary_date = local_now.date().isoformat()
+    if RADIK_SESSION_DATE and summary_date != RADIK_SESSION_DATE:
+        return
     with daily_stats_lock:
         if daily_summary_sent_date == summary_date:
             return
