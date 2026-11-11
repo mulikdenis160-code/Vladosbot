@@ -48,7 +48,11 @@ SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
 GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC", "15"))
 SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
 PRICE_RETRY_TIMEOUT_SEC = max(1, int(os.getenv("PRICE_RETRY_TIMEOUT_SEC", "15")))
-MAX_OVERLAYS = min(2, max(0, int(os.getenv("MAX_OVERLAYS", "2"))))
+OVERLAY_STAKE_PERCENTS = (2, 4, 8)
+MAX_OVERLAYS = min(
+    len(OVERLAY_STAKE_PERCENTS),
+    max(0, int(os.getenv("MAX_OVERLAYS", str(len(OVERLAY_STAKE_PERCENTS))))),
+)
 MARKET_PAUSE_SEC = max(20 * 60, int(os.getenv("MARKET_PAUSE_SEC", str(20 * 60))))
 STARTUP_SAFETY_PAUSE_SEC = max(
     0, int(os.getenv("STARTUP_SAFETY_PAUSE_SEC", str(MARKET_PAUSE_SEC)))
@@ -254,6 +258,13 @@ market_pause_recovery_seen = False
 def display_pair(active: str) -> str:
     clean = active.replace("_otc", "").upper()
     return f"{clean[:3]}/{clean[3:]}" if len(clean) == 6 else clean
+
+
+def overlay_stake_percent(overlay_number: int) -> int:
+    """Return the configured stake for a one-based overlay number."""
+    if overlay_number < 1 or overlay_number > len(OVERLAY_STAKE_PERCENTS):
+        raise ValueError(f"Invalid overlay number: {overlay_number}")
+    return OVERLAY_STAKE_PERCENTS[overlay_number - 1]
 
 
 def normalize_payout(value: Any) -> Optional[float]:
@@ -579,7 +590,7 @@ def send_signal_to_telegram(
     )
     attempt = int(signal.get("attempt", 0))
     overlay_line = (
-        f"Перекрытие {attempt}/{MAX_OVERLAYS} • ставка {attempt + 1}%\n"
+        f"Перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%\n"
         if attempt > 0 else ""
     )
     text = (
@@ -996,7 +1007,7 @@ def send_entry_confirmation(signal: dict[str, Any]) -> None:
         return
     attempt = int(signal.get("attempt", 0))
     text = (
-        f"Зашел на перекрытие {attempt}/{MAX_OVERLAYS} • ставка {attempt + 1}%"
+        f"Зашел на перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%"
         if attempt > 0 else "Зашел"
     )
     delivery = telegram_request("/send-message", {"text": text})
@@ -1505,7 +1516,11 @@ SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
 GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC", "15"))
 SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
 PRICE_RETRY_TIMEOUT_SEC = max(1, int(os.getenv("PRICE_RETRY_TIMEOUT_SEC", "15")))
-MAX_OVERLAYS = min(2, max(0, int(os.getenv("MAX_OVERLAYS", "2"))))
+OVERLAY_STAKE_PERCENTS = (2, 4, 8)
+MAX_OVERLAYS = min(
+    len(OVERLAY_STAKE_PERCENTS),
+    max(0, int(os.getenv("MAX_OVERLAYS", str(len(OVERLAY_STAKE_PERCENTS))))),
+)
 MARKET_PAUSE_SEC = max(20 * 60, int(os.getenv("MARKET_PAUSE_SEC", str(20 * 60))))
 STARTUP_SAFETY_PAUSE_SEC = max(
     0, int(os.getenv("STARTUP_SAFETY_PAUSE_SEC", str(MARKET_PAUSE_SEC)))
@@ -2017,7 +2032,7 @@ def send_signal_to_telegram(
     )
     attempt = int(signal.get("attempt", 0))
     overlay_line = (
-        f"Перекрытие {attempt}/{MAX_OVERLAYS} • ставка {attempt + 1}%\n"
+        f"Перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%\n"
         if attempt > 0 else ""
     )
     text = (
@@ -2377,7 +2392,7 @@ def send_entry_confirmation(signal: dict[str, Any]) -> None:
         return
     attempt = int(signal.get("attempt", 0))
     text = (
-        f"Зашел на перекрытие {attempt}/{MAX_OVERLAYS} • ставка {attempt + 1}%"
+        f"Зашел на перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%"
         if attempt > 0 else "Зашел"
     )
     delivery = telegram_request("/send-message", {"text": text})
@@ -2450,7 +2465,9 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
     if outcome == "LOSS" and has_overlay_left and in_signal_window():
         try:
             send_overlay_preparation_to_telegram(
-                signal["attempt"] + 1, signal["attempt"] + 2, signal["pair"]
+                signal["attempt"] + 1,
+                overlay_stake_percent(signal["attempt"] + 1),
+                signal["pair"],
             )
         except Exception as exc:
             log.warning("Не удалось сообщить о подготовке перекрытия: %s", type(exc).__name__)

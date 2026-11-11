@@ -26,7 +26,7 @@ packages = ["freetype", "glibcLocales", "lcms2", "libimagequant", "libjpeg", "li
 [userenv]
 
 [userenv.shared]
-MAX_OVERLAYS = "2"
+MAX_OVERLAYS = "3"
 SIGNAL_DURATION_SEC = "300"
 SIGNAL_ENTRY_NOTICE_SEC = "15"
 SIGNAL_RETRY_DELAY_SEC = "300"

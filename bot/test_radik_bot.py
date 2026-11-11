@@ -55,6 +55,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             "telegram_request": bot.telegram_request,
             "telegram_chat_id": bot.TELEGRAM_CHAT_ID,
             "telegram_public_base_url": bot.TELEGRAM_PUBLIC_BASE_URL,
+            "max_overlays": bot.MAX_OVERLAYS,
         }
         bot.active_signal = None
         bot.pending_signal = None
@@ -79,6 +80,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.persist_signal_state = lambda: None
         bot.TELEGRAM_CHAT_ID = "test-chat"
         bot.TELEGRAM_PUBLIC_BASE_URL = "https://example.test"
+        bot.MAX_OVERLAYS = len(bot.OVERLAY_STAKE_PERCENTS)
 
     def tearDown(self):
         bot.active_signal = self.saved["active_signal"]
@@ -112,8 +114,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.telegram_request = self.saved["telegram_request"]
         bot.TELEGRAM_CHAT_ID = self.saved["telegram_chat_id"]
         bot.TELEGRAM_PUBLIC_BASE_URL = self.saved["telegram_public_base_url"]
+        bot.MAX_OVERLAYS = self.saved["max_overlays"]
 
-    def test_two_losses_become_overlays_then_third_is_final_loss(self):
+    def test_three_overlays_use_configured_stakes_then_fourth_loss_is_final(self):
         overlays, finals, recorded, pauses = [], [], [], []
         generated_candidates = [
             {
@@ -130,6 +133,14 @@ class OverlayAndPauseTests(unittest.TestCase):
                 "raw_pair": "USDJPY_otc",
                 "direction": "ВГОРУ",
                 "entry_price": 150.0,
+                "result": None,
+            },
+            {
+                **signal(0),
+                "pair": "AUD/CAD",
+                "raw_pair": "AUDCAD_otc",
+                "direction": "ВНИЗ",
+                "entry_price": 0.91,
                 "result": None,
             },
         ]
@@ -177,16 +188,31 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual([item["result"] for item in finals], ["LOSS", "LOSS"])
             self.assertEqual(
                 self.overlay_preparations,
-                [(1, 2, "EUR/USD"), (2, 3, "GBP/USD")],
+                [(1, 2, "EUR/USD"), (2, 4, "GBP/USD")],
             )
             self.assertEqual(recorded, [])
 
             third = deepcopy(bot.pending_signal)
             third["result"] = "LOSS"
+            third["close_price"] = 1.24
             bot.active_signal, bot.pending_signal = third, None
             bot.handle_signal_outcome(third, "LOSS", 300)
+            self.assertEqual(len(overlays), 3)
+            self.assertEqual(overlays[2]["pair"], "AUD/CAD")
+            self.assertEqual(overlays[2]["attempt"], 3)
+            self.assertEqual(
+                self.overlay_preparations,
+                [(1, 2, "EUR/USD"), (2, 4, "GBP/USD"), (3, 8, "USD/JPY")],
+            )
             self.assertEqual(len(finals), 3)
             self.assertEqual([item["result"] for item in finals], ["LOSS", "LOSS", "LOSS"])
+
+            fourth = deepcopy(bot.pending_signal)
+            fourth["result"] = "LOSS"
+            bot.active_signal, bot.pending_signal = fourth, None
+            bot.handle_signal_outcome(fourth, "LOSS", 400)
+            self.assertEqual(len(finals), 4)
+            self.assertEqual([item["result"] for item in finals], ["LOSS"] * 4)
             self.assertEqual([item["result"] for item in recorded], ["LOSS"])
             self.assertEqual(pauses, [])
             self.assertEqual(bot.market_pause_until, 0)
@@ -515,10 +541,14 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(
             requests[0][1]["text"],
             "EUR/USD OTC\n"
-            "Перекрытие 1/2 • ставка 2%\n"
+            "Перекрытие 1/3 • ставка 2%\n"
             "На 2 минуты вверх\n"
             "Захожу с новой свечи.",
         )
+
+        third_overlay = signal(3)
+        bot.send_signal_to_telegram(third_overlay)
+        self.assertIn("Перекрытие 3/3 • ставка 8%", requests[1][1]["text"])
 
     def test_entry_countdown_rounds_up_and_never_goes_negative(self):
         with patch("bot.radik_bot.time.time", return_value=100.0):
@@ -569,10 +599,16 @@ class OverlayAndPauseTests(unittest.TestCase):
         }
 
         bot.send_entry_confirmation(signal(1))
+        bot.send_entry_confirmation(signal(2))
+        bot.send_entry_confirmation(signal(3))
 
         self.assertEqual(
-            requests,
-            [("/send-message", {"text": "Зашел на перекрытие 1/2 • ставка 2%"})],
+            [payload["text"] for _, payload in requests],
+            [
+                "Зашел на перекрытие 1/3 • ставка 2%",
+                "Зашел на перекрытие 2/3 • ставка 4%",
+                "Зашел на перекрытие 3/3 • ставка 8%",
+            ],
         )
 
     def test_overlay_preparation_increases_stake_percent(self):
@@ -582,15 +618,18 @@ class OverlayAndPauseTests(unittest.TestCase):
         }
 
         self.saved["send_overlay_preparation"](1, 2, "EUR/USD")
-        self.saved["send_overlay_preparation"](2, 3, "GBP/USD")
+        self.saved["send_overlay_preparation"](2, 4, "GBP/USD")
+        self.saved["send_overlay_preparation"](3, 8, "USD/JPY")
 
         self.assertEqual(
             [payload["text"] for _, payload in requests],
             [
                 "Меняю пару, ищу следующую ситуацию.\n"
-                "Готовлю первое перекрытие 1/2 по EUR USD OTC, буду заходить на 2%.",
+                "Готовлю первое перекрытие 1/3 по EUR USD OTC, буду заходить на 2%.",
                 "Меняю пару, ищу следующую ситуацию.\n"
-                "Готовлю второе перекрытие 2/2 по GBP USD OTC, буду заходить на 3%.",
+                "Готовлю второе перекрытие 2/3 по GBP USD OTC, буду заходить на 4%.",
+                "Меняю пару, ищу следующую ситуацию.\n"
+                "Готовлю третье перекрытие 3/3 по USD JPY OTC, буду заходить на 8%.",
             ],
         )
 
