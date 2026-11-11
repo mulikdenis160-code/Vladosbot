@@ -577,12 +577,22 @@ def send_signal_to_telegram(
         f"Захожу с новой свечи через {remaining} сек."
         if remaining is not None else "Захожу с новой свечи."
     )
+    attempt = int(signal.get("attempt", 0))
+    overlay_line = (
+        f"Перекрытие {attempt}/{MAX_OVERLAYS} • ставка {attempt + 1}%\n"
+        if attempt > 0 else ""
+    )
     text = (
         f"{pair} OTC\n"
+        f"{overlay_line}"
         f"На {signal_duration_label()} {direction}\n"
         f"{entry_line}"
     )
-    telegram_request("/send-message", {"text": text})
+    delivery = telegram_request("/send-message", {"text": text})
+    log.info(
+        "Сигнал %s (попытка %s) подтверждён Telegram message_id=%s",
+        signal["pair"], attempt + 1, delivery.get("message_id", "невідомо"),
+    )
 
 
 def send_search_to_telegram() -> None:
@@ -596,18 +606,26 @@ def send_search_to_telegram() -> None:
     last_signal_outcome = None
 
 
-def send_overlay_preparation_to_telegram(overlay_number: int, stake_percent: int) -> None:
+def send_overlay_preparation_to_telegram(
+    overlay_number: int, stake_percent: int, lost_pair: Optional[str] = None
+) -> None:
     if not TELEGRAM_CHAT_ID:
         return
     ordinal = {1: "первое", 2: "второе", 3: "третье"}.get(
         overlay_number, f"{overlay_number}-е"
     )
-    telegram_request("/send-message", {
+    pair = f" по {lost_pair.replace('/', ' ').upper()} OTC" if lost_pair else ""
+    delivery = telegram_request("/send-message", {
         "text": (
             "Меняю пару, ищу следующую ситуацию.\n"
-            f"Готовлю {ordinal} перекрытие, буду заходить на {stake_percent}%."
+            f"Готовлю {ordinal} перекрытие {overlay_number}/{MAX_OVERLAYS}{pair}, "
+            f"буду заходить на {stake_percent}%."
         ),
     })
+    log.info(
+        "Сообщение о перекрытии %s/%s подтверждено Telegram message_id=%s",
+        overlay_number, MAX_OVERLAYS, delivery.get("message_id", "невідомо"),
+    )
 
 
 def send_overlay_cancelled_to_telegram() -> None:
@@ -976,7 +994,16 @@ def _generate_best_signal(excluded_pairs: Optional[set[str]] = None) -> Optional
 def send_entry_confirmation(signal: dict[str, Any]) -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    telegram_request("/send-message", {"text": "Зашел"})
+    attempt = int(signal.get("attempt", 0))
+    text = (
+        f"Зашел на перекрытие {attempt}/{MAX_OVERLAYS} • ставка {attempt + 1}%"
+        if attempt > 0 else "Зашел"
+    )
+    delivery = telegram_request("/send-message", {"text": text})
+    log.info(
+        "Подтверждение входа %s доставлено Telegram message_id=%s",
+        signal["pair"], delivery.get("message_id", "невідомо"),
+    )
 
 
 def close_price(active: str, not_before: float = 0.0) -> float:
@@ -1988,12 +2015,22 @@ def send_signal_to_telegram(
         f"Захожу с новой свечи через {remaining} сек."
         if remaining is not None else "Захожу с новой свечи."
     )
+    attempt = int(signal.get("attempt", 0))
+    overlay_line = (
+        f"Перекрытие {attempt}/{MAX_OVERLAYS} • ставка {attempt + 1}%\n"
+        if attempt > 0 else ""
+    )
     text = (
         f"{pair} OTC\n"
+        f"{overlay_line}"
         f"На {signal_duration_label()} {direction}\n"
         f"{entry_line}"
     )
-    telegram_request("/send-message", {"text": text})
+    delivery = telegram_request("/send-message", {"text": text})
+    log.info(
+        "Сигнал %s (попытка %s) подтверждён Telegram message_id=%s",
+        signal["pair"], attempt + 1, delivery.get("message_id", "невідомо"),
+    )
 
 
 def send_search_to_telegram() -> None:
@@ -2338,7 +2375,16 @@ def _generate_best_signal(excluded_pairs: Optional[set[str]] = None) -> Optional
 def send_entry_confirmation(signal: dict[str, Any]) -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    telegram_request("/send-message", {"text": "Зашел"})
+    attempt = int(signal.get("attempt", 0))
+    text = (
+        f"Зашел на перекрытие {attempt}/{MAX_OVERLAYS} • ставка {attempt + 1}%"
+        if attempt > 0 else "Зашел"
+    )
+    delivery = telegram_request("/send-message", {"text": text})
+    log.info(
+        "Подтверждение входа %s доставлено Telegram message_id=%s",
+        signal["pair"], delivery.get("message_id", "невідомо"),
+    )
 
 
 def close_price(active: str, not_before: float = 0.0) -> float:
@@ -2404,7 +2450,7 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
     if outcome == "LOSS" and has_overlay_left and in_signal_window():
         try:
             send_overlay_preparation_to_telegram(
-                signal["attempt"] + 1, signal["attempt"] + 2
+                signal["attempt"] + 1, signal["attempt"] + 2, signal["pair"]
             )
         except Exception as exc:
             log.warning("Не удалось сообщить о подготовке перекрытия: %s", type(exc).__name__)
@@ -2459,7 +2505,11 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         try:
             send_result_to_telegram(signal)
         except Exception as exc:
-            log.warning("Не удалось отправить результат перекрываемой сделки: %s", type(exc).__name__)
+            queue_result_delivery(signal, now, exc)
+            log.warning(
+                "Не удалось отправить результат сделки %s (%s); добавлено в очередь",
+                signal["pair"], type(exc).__name__,
+            )
         try:
             send_signal_to_telegram(replacement)
         except Exception as exc:
@@ -2472,10 +2522,7 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             "результат спроби враховано, нове перекриття не створено",
             signal["pair"],
         )
-        try:
-            send_result_to_telegram(signal)
-        except Exception as exc:
-            log.warning("Не удалось отправить результат сделки: %s", type(exc).__name__)
+        deliver_terminal_result(signal, now)
         try:
             send_incomplete_series_to_telegram(signal)
         except Exception as exc:

@@ -65,7 +65,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.last_signal_outcome = None
         self.overlay_preparations = []
         bot.send_overlay_preparation_to_telegram = (
-            lambda number, percent: self.overlay_preparations.append((number, percent))
+            lambda number, percent, pair=None: self.overlay_preparations.append(
+                (number, percent, pair)
+            )
         )
         bot.send_overlay_cancelled_to_telegram = lambda: None
         bot.market_pause_until = 0
@@ -158,7 +160,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual(overlays[0]["attempt"], 1)
             self.assertEqual(overlays[0]["series_pairs"], ["EURUSD_otc", "GBPUSD_otc"])
             self.assertEqual([item["result"] for item in finals], ["LOSS"])
-            self.assertEqual(self.overlay_preparations, [(1, 2)])
+            self.assertEqual(self.overlay_preparations, [(1, 2, "EUR/USD")])
             self.assertEqual(recorded, [])
             self.assertEqual(excluded_on_recovery, [{"EURUSD_otc"}])
 
@@ -173,7 +175,10 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual(overlays[1]["attempt"], 2)
             self.assertEqual(excluded_on_recovery[1], {"EURUSD_otc", "GBPUSD_otc"})
             self.assertEqual([item["result"] for item in finals], ["LOSS", "LOSS"])
-            self.assertEqual(self.overlay_preparations, [(1, 2), (2, 3)])
+            self.assertEqual(
+                self.overlay_preparations,
+                [(1, 2, "EUR/USD"), (2, 3, "GBP/USD")],
+            )
             self.assertEqual(recorded, [])
 
             third = deepcopy(bot.pending_signal)
@@ -498,6 +503,23 @@ class OverlayAndPauseTests(unittest.TestCase):
         finally:
             bot.SIGNAL_DURATION_SEC = original_duration
 
+    def test_overlay_signal_identifies_attempt_and_stake(self):
+        requests = []
+        bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
+            "ok": True, "message_id": 130,
+        }
+        current = signal(1)
+
+        bot.send_signal_to_telegram(current)
+
+        self.assertEqual(
+            requests[0][1]["text"],
+            "EUR/USD OTC\n"
+            "Перекрытие 1/2 • ставка 2%\n"
+            "На 2 минуты вверх\n"
+            "Захожу с новой свечи.",
+        )
+
     def test_entry_countdown_rounds_up_and_never_goes_negative(self):
         with patch("bot.radik_bot.time.time", return_value=100.0):
             self.assertEqual(bot.seconds_until_entry(134.2), 35)
@@ -540,22 +562,35 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         self.assertEqual(requests, [("/send-message", {"text": "Зашел"})])
 
+    def test_overlay_entry_confirmation_names_the_overlay(self):
+        requests = []
+        bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
+            "ok": True, "message_id": 131,
+        }
+
+        bot.send_entry_confirmation(signal(1))
+
+        self.assertEqual(
+            requests,
+            [("/send-message", {"text": "Зашел на перекрытие 1/2 • ставка 2%"})],
+        )
+
     def test_overlay_preparation_increases_stake_percent(self):
         requests = []
         bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
             "ok": True, "message_id": 129,
         }
 
-        self.saved["send_overlay_preparation"](1, 2)
-        self.saved["send_overlay_preparation"](2, 3)
+        self.saved["send_overlay_preparation"](1, 2, "EUR/USD")
+        self.saved["send_overlay_preparation"](2, 3, "GBP/USD")
 
         self.assertEqual(
             [payload["text"] for _, payload in requests],
             [
                 "Меняю пару, ищу следующую ситуацию.\n"
-                "Готовлю первое перекрытие, буду заходить на 2%.",
+                "Готовлю первое перекрытие 1/2 по EUR USD OTC, буду заходить на 2%.",
                 "Меняю пару, ищу следующую ситуацию.\n"
-                "Готовлю второе перекрытие, буду заходить на 3%.",
+                "Готовлю второе перекрытие 2/2 по GBP USD OTC, буду заходить на 3%.",
             ],
         )
 
