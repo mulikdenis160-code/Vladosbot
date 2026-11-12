@@ -45,7 +45,7 @@ SIGNAL_DURATION_SEC = 2 * 60
 SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
 SIGNAL_RETRY_DELAY_SEC = max(30, int(os.getenv("SIGNAL_RETRY_DELAY_SEC", "180")))
 SESSION_PAIR_DELAY_SEC = 2 * 60
-FIRST_OVERLAY_DELAY_SEC = 2 * 60
+OVERLAY_SIGNAL_DELAY_SEC = 2 * 60
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
 GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC", "15"))
 SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
@@ -623,23 +623,14 @@ def send_overlay_preparation_to_telegram(
 ) -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    if overlay_number == 1:
-        telegram_request("/send-message", {
-            "text": (
-                "Минус. Меняю пару, ищу следующую ситуацию, готовлю первое "
-                "перекрытие, буду заходить на 2%."
-            ),
-        })
-        return
-    ordinal = {1: "первому", 2: "второму", 3: "третьему"}.get(
+    ordinal = {1: "первое", 2: "второе", 3: "третье"}.get(
         overlay_number, f"{overlay_number}-е"
     )
-    pair = f" по {lost_pair.replace('/', ' ').upper()} OTC" if lost_pair else ""
+    stake = overlay_stake_percent(overlay_number)
     delivery = telegram_request("/send-message", {
         "text": (
-            f"Внимание! Переходим к {ordinal} перекрытию "
-            f"{overlay_number}/{MAX_OVERLAYS}{pair}. "
-            "Сначала ищу новый сигнал; ставку сообщу отдельно."
+            "Минус. Меняю пару, ищу следующую ситуацию, готовлю "
+            f"{ordinal} перекрытие, буду заходить на {stake}%."
         ),
     })
     log.info(
@@ -2494,10 +2485,7 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             except Exception as exc:
                 log.warning("Не удалось сообщить о подготовке перекрытия: %s", type(exc).__name__)
             signal["overlay_waiting"] = True
-            overlay_delay = (
-                FIRST_OVERLAY_DELAY_SEC
-                if signal["attempt"] == 0 else SIGNAL_RETRY_DELAY_SEC
-            )
+            overlay_delay = OVERLAY_SIGNAL_DELAY_SEC
             signal["overlay_due_at"] = now + overlay_delay
             with signal_state_lock:
                 active_signal = signal
@@ -2513,14 +2501,6 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             return
         signal.pop("overlay_waiting", None)
         signal.pop("overlay_due_at", None)
-        if signal["attempt"] > 0:
-            try:
-                send_search_to_telegram()
-            except Exception as exc:
-                log.warning(
-                    "Не удалось сообщить о поиске следующего перекрытия: %s",
-                    type(exc).__name__,
-                )
         excluded_pairs = set(signal.get("series_pairs") or [signal["raw_pair"]])
         with signal_state_lock:
             signal_searching = True

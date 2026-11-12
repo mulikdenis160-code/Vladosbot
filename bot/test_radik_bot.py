@@ -177,10 +177,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             bot.handle_signal_outcome(current, "LOSS", at)
             self.assertIs(bot.active_signal, current)
             self.assertTrue(current["overlay_waiting"])
-            delay = (
-                bot.FIRST_OVERLAY_DELAY_SEC
-                if current["attempt"] == 0 else bot.SIGNAL_RETRY_DELAY_SEC
-            )
+            delay = bot.OVERLAY_SIGNAL_DELAY_SEC
             self.assertEqual(bot.next_signal_at, at + delay)
             bot.handle_signal_outcome(current, "LOSS", at + delay - 1)
             self.assertIs(bot.active_signal, current)
@@ -667,7 +664,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             ],
         )
 
-    def test_first_overlay_preparation_names_two_percent_stake(self):
+    def test_each_overlay_preparation_names_its_stake_and_number(self):
         requests = []
         bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
             "ok": True, "message_id": 129,
@@ -683,14 +680,15 @@ class OverlayAndPauseTests(unittest.TestCase):
             [
                 "Минус. Меняю пару, ищу следующую ситуацию, готовлю первое "
                 "перекрытие, буду заходить на 2%.",
-                "Внимание! Переходим к второму перекрытию 2/3 по GBP USD OTC. "
-                "Сначала ищу новый сигнал; ставку сообщу отдельно.",
-                "Внимание! Переходим к третьему перекрытию 3/3 по USD JPY OTC. "
-                "Сначала ищу новый сигнал; ставку сообщу отдельно.",
+                "Минус. Меняю пару, ищу следующую ситуацию, готовлю второе "
+                "перекрытие, буду заходить на 4%.",
+                "Минус. Меняю пару, ищу следующую ситуацию, готовлю третье "
+                "перекрытие, буду заходить на 8%.",
             ],
         )
         self.assertIn("2%", texts[0])
-        self.assertTrue(all("%" not in text for text in texts[1:]))
+        self.assertIn("4%", texts[1])
+        self.assertIn("8%", texts[2])
 
     def test_terminal_loss_does_not_create_market_pause(self):
         finals, pauses = [], []
