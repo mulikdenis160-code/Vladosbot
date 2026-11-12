@@ -32,6 +32,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             "signal_searching": bot.signal_searching,
             "last_signal_outcome": bot.last_signal_outcome,
             "next_signal_at": bot.next_signal_at,
+            "signal_retry_delay": bot.SIGNAL_RETRY_DELAY_SEC,
             "pause_until": bot.market_pause_until,
             "pause_started_at": bot.market_pause_started_at,
             "pause_last_check": bot.market_pause_last_check,
@@ -66,8 +67,8 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.last_signal_outcome = None
         self.overlay_preparations = []
         bot.send_overlay_preparation_to_telegram = (
-            lambda number, percent, pair=None: self.overlay_preparations.append(
-                (number, percent, pair)
+            lambda number, pair=None: self.overlay_preparations.append(
+                (number, pair)
             )
         )
         bot.send_overlay_cancelled_to_telegram = lambda: None
@@ -81,6 +82,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.TELEGRAM_CHAT_ID = "test-chat"
         bot.TELEGRAM_PUBLIC_BASE_URL = "https://example.test"
         bot.MAX_OVERLAYS = len(bot.OVERLAY_STAKE_PERCENTS)
+        bot.SIGNAL_RETRY_DELAY_SEC = 180
 
     def tearDown(self):
         bot.active_signal = self.saved["active_signal"]
@@ -91,6 +93,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.signal_searching = self.saved["signal_searching"]
         bot.last_signal_outcome = self.saved["last_signal_outcome"]
         bot.next_signal_at = self.saved["next_signal_at"]
+        bot.SIGNAL_RETRY_DELAY_SEC = self.saved["signal_retry_delay"]
         bot.market_pause_until = self.saved["pause_until"]
         bot.market_pause_started_at = self.saved["pause_started_at"]
         bot.market_pause_last_check = self.saved["pause_last_check"]
@@ -146,6 +149,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         ]
         excluded_on_recovery = []
         original_generator = bot._generate_best_signal
+        original_search_notice = bot.send_search_to_telegram
 
         def generate_recovery(excluded_pairs=None):
             excluded_on_recovery.append(set(excluded_pairs or set()))
@@ -160,26 +164,36 @@ class OverlayAndPauseTests(unittest.TestCase):
         )
         bot.start_market_pause = lambda now, value: pauses.append((now, deepcopy(value)))
         bot._generate_best_signal = generate_recovery
+        bot.send_search_to_telegram = lambda: None
+
+        def resolve_loss_with_pause(current, at):
+            bot.active_signal, bot.pending_signal = current, None
+            bot.handle_signal_outcome(current, "LOSS", at)
+            self.assertIs(bot.active_signal, current)
+            self.assertTrue(current["overlay_waiting"])
+            self.assertEqual(bot.next_signal_at, at + 180)
+            bot.handle_signal_outcome(current, "LOSS", at + 179)
+            self.assertIs(bot.active_signal, current)
+            self.assertIsNone(bot.pending_signal)
+            bot.handle_signal_outcome(current, "LOSS", at + 180)
 
         try:
             first = signal(0)
-            bot.active_signal = first
-            bot.handle_signal_outcome(first, "LOSS", 100)
+            resolve_loss_with_pause(first, 100)
             self.assertEqual(len(overlays), 1)
             self.assertEqual(overlays[0]["pair"], "GBP/USD")
             self.assertEqual(overlays[0]["direction"], "ВНИЗ")
             self.assertEqual(overlays[0]["attempt"], 1)
             self.assertEqual(overlays[0]["series_pairs"], ["EURUSD_otc", "GBPUSD_otc"])
             self.assertEqual([item["result"] for item in finals], ["LOSS"])
-            self.assertEqual(self.overlay_preparations, [(1, 2, "EUR/USD")])
+            self.assertEqual(self.overlay_preparations, [(1, "EUR/USD")])
             self.assertEqual(recorded, [])
             self.assertEqual(excluded_on_recovery, [{"EURUSD_otc"}])
 
             second = deepcopy(bot.pending_signal)
             second["result"] = "LOSS"
             second["close_price"] = 1.25
-            bot.active_signal, bot.pending_signal = second, None
-            bot.handle_signal_outcome(second, "LOSS", 200)
+            resolve_loss_with_pause(second, 400)
             self.assertEqual(len(overlays), 2)
             self.assertEqual(overlays[1]["pair"], "USD/JPY")
             self.assertEqual(overlays[1]["direction"], "ВГОРУ")
@@ -188,21 +202,20 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual([item["result"] for item in finals], ["LOSS", "LOSS"])
             self.assertEqual(
                 self.overlay_preparations,
-                [(1, 2, "EUR/USD"), (2, 4, "GBP/USD")],
+                [(1, "EUR/USD"), (2, "GBP/USD")],
             )
             self.assertEqual(recorded, [])
 
             third = deepcopy(bot.pending_signal)
             third["result"] = "LOSS"
             third["close_price"] = 1.24
-            bot.active_signal, bot.pending_signal = third, None
-            bot.handle_signal_outcome(third, "LOSS", 300)
+            resolve_loss_with_pause(third, 700)
             self.assertEqual(len(overlays), 3)
             self.assertEqual(overlays[2]["pair"], "AUD/CAD")
             self.assertEqual(overlays[2]["attempt"], 3)
             self.assertEqual(
                 self.overlay_preparations,
-                [(1, 2, "EUR/USD"), (2, 4, "GBP/USD"), (3, 8, "USD/JPY")],
+                [(1, "EUR/USD"), (2, "GBP/USD"), (3, "USD/JPY")],
             )
             self.assertEqual(len(finals), 3)
             self.assertEqual([item["result"] for item in finals], ["LOSS", "LOSS", "LOSS"])
@@ -219,24 +232,34 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertIsNone(bot.active_signal)
         finally:
             bot._generate_best_signal = original_generator
+            bot.send_search_to_telegram = original_search_notice
 
-    def test_no_alternative_pair_ends_series_without_blind_dogon(self):
+    def test_no_alternative_pair_ends_series_after_overlay_wait(self):
         finals, recorded = [], []
+        original_search_notice = bot.send_search_to_telegram
         bot.in_signal_window = lambda: True
         bot._generate_best_signal = lambda excluded_pairs=None: None
+        bot.send_search_to_telegram = lambda: None
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
         bot.record_signal_result = lambda value, *args: recorded.append(
             {**deepcopy(value), "result": args[0] if args else value["result"]}
         )
 
-        current = signal(0)
-        bot.active_signal = current
-        bot.handle_signal_outcome(current, "LOSS", 100)
+        try:
+            current = signal(0)
+            bot.active_signal = current
+            bot.handle_signal_outcome(current, "LOSS", 100)
+            self.assertIs(current, bot.active_signal)
+            self.assertTrue(current["overlay_waiting"])
 
-        self.assertIsNone(bot.pending_signal)
-        self.assertIsNone(bot.active_signal)
-        self.assertEqual([item["result"] for item in recorded], ["LOSS"])
-        self.assertEqual([item["result"] for item in finals], ["LOSS"])
+            bot.handle_signal_outcome(current, "LOSS", 280)
+
+            self.assertIsNone(bot.pending_signal)
+            self.assertIsNone(bot.active_signal)
+            self.assertEqual([item["result"] for item in recorded], ["LOSS"])
+            self.assertEqual([item["result"] for item in finals], ["LOSS"])
+        finally:
+            bot.send_search_to_telegram = original_search_notice
 
     def test_pair_rotation_skips_all_pairs_already_used_in_series(self):
         eligible = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc"]
@@ -418,6 +441,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             first = signal(0)
             bot.active_signal = first
             bot.handle_signal_outcome(first, "LOSS", 100)
+            bot.handle_signal_outcome(first, "LOSS", 280)
 
             later = signal(1)
             later["result"] = "UNKNOWN"
@@ -556,7 +580,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertEqual(bot.seconds_until_entry(100.0), 0)
             self.assertEqual(bot.seconds_until_entry(99.0), 0)
 
-    def test_search_notice_is_text_only(self):
+    def test_search_notice_is_simple(self):
         requests = []
         bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
             "ok": True, "message_id": 126,
@@ -565,9 +589,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.send_search_to_telegram()
 
         self.assertEqual([path for path, _ in requests], ["/send-message"])
-        self.assertEqual(requests[0][1]["text"], "Меняю пару, ищу следующую ситуацию.")
+        self.assertEqual(requests[0][1]["text"], "Ищу сигнал.")
 
-    def test_win_search_notice_says_stake_returns_to_one_percent(self):
+    def test_win_search_notice_stays_simple(self):
         requests = []
         bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
             "ok": True, "message_id": 127,
@@ -578,7 +602,7 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         self.assertEqual(
             requests[0][1]["text"],
-            "Меняю пару, ищу следующую ситуацию.\nВозвращаюсь на 1%.",
+            "Ищу сигнал.",
         )
         self.assertIsNone(bot.last_signal_outcome)
 
@@ -611,35 +635,38 @@ class OverlayAndPauseTests(unittest.TestCase):
             ],
         )
 
-    def test_overlay_preparation_increases_stake_percent(self):
+    def test_overlay_preparation_warns_before_stake_is_sent(self):
         requests = []
         bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
             "ok": True, "message_id": 129,
         }
 
-        self.saved["send_overlay_preparation"](1, 2, "EUR/USD")
-        self.saved["send_overlay_preparation"](2, 4, "GBP/USD")
-        self.saved["send_overlay_preparation"](3, 8, "USD/JPY")
+        self.saved["send_overlay_preparation"](1, "EUR/USD")
+        self.saved["send_overlay_preparation"](2, "GBP/USD")
+        self.saved["send_overlay_preparation"](3, "USD/JPY")
 
+        texts = [payload["text"] for _, payload in requests]
         self.assertEqual(
-            [payload["text"] for _, payload in requests],
+            texts,
             [
-                "Меняю пару, ищу следующую ситуацию.\n"
-                "Готовлю первое перекрытие 1/3 по EUR USD OTC, буду заходить на 2%.",
-                "Меняю пару, ищу следующую ситуацию.\n"
-                "Готовлю второе перекрытие 2/3 по GBP USD OTC, буду заходить на 4%.",
-                "Меняю пару, ищу следующую ситуацию.\n"
-                "Готовлю третье перекрытие 3/3 по USD JPY OTC, буду заходить на 8%.",
+                "Внимание! Переходим к первому перекрытию 1/3 по EUR USD OTC. "
+                "Сначала ищу новый сигнал; ставку сообщу отдельно.",
+                "Внимание! Переходим к второму перекрытию 2/3 по GBP USD OTC. "
+                "Сначала ищу новый сигнал; ставку сообщу отдельно.",
+                "Внимание! Переходим к третьему перекрытию 3/3 по USD JPY OTC. "
+                "Сначала ищу новый сигнал; ставку сообщу отдельно.",
             ],
         )
+        self.assertTrue(all("%" not in text for text in texts))
 
     def test_terminal_loss_does_not_create_market_pause(self):
         finals, pauses = [], []
+        bot.in_signal_window = lambda: True
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
         bot.record_signal_result = lambda value, *args: None
         bot.start_market_pause = lambda now, value: pauses.append((now, deepcopy(value)))
 
-        current = signal(2)
+        current = signal(3)
         current["result"] = "LOSS"
         bot.active_signal = current
         bot.handle_signal_outcome(current, "LOSS", 100)
@@ -647,6 +674,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual([item["result"] for item in finals], ["LOSS"])
         self.assertEqual(pauses, [])
         self.assertEqual(bot.market_pause_until, 0)
+        self.assertEqual(bot.next_signal_at, 100 + bot.SIGNAL_RETRY_DELAY_SEC)
 
     def test_search_is_blocked_while_a_series_or_search_is_active(self):
         calls = []
