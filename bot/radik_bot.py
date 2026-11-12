@@ -656,6 +656,12 @@ def send_search_finished_to_telegram() -> None:
     })
 
 
+def send_session_started_to_telegram() -> None:
+    if not TELEGRAM_CHAT_ID:
+        return
+    telegram_request("/send-message", {"text": "Начинаю сессию."})
+
+
 def send_result_to_telegram(signal: dict[str, Any]) -> None:
     pair = signal["pair"].replace(" ", "").upper()
     if signal.get("result") == "UNKNOWN":
@@ -748,18 +754,6 @@ def send_startup_safety_pause_to_telegram(minutes: int) -> None:
             "⏸ ПРОВЕРКА ПОСЛЕ ПЕРЕЗАПУСКА\n\n"
             f"Новые сигналы приостановлены на {minutes} мин. "
             "Бот проверит свежие данные нескольких пар и возобновит поиск после подтверждения рынка."
-        ),
-    })
-
-
-def send_incomplete_series_to_telegram(signal: dict[str, Any]) -> None:
-    if not TELEGRAM_CHAT_ID:
-        return
-    telegram_request("/send-message", {
-        "text": (
-            f"⏹ СЕРИЯ ОСТАНОВЛЕНА • {signal['pair'].replace('/', ' ')} OTC\n\n"
-            "Следующий сигнал не создан: рабочее время завершилось. "
-            "Проигрыш за завершённую попытку учтён в статистике."
         ),
     })
 
@@ -1126,10 +1120,6 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             "результат спроби враховано, нове перекриття не створено",
             signal["pair"],
         )
-        try:
-            send_incomplete_series_to_telegram(signal)
-        except Exception as exc:
-            log.warning("Не вдалося повідомити про незавершену серію: %s", type(exc).__name__)
         with signal_state_lock:
             active_signal = None
         record_signal_result(signal, "LOSS", now)
@@ -1649,6 +1639,7 @@ signal_thread: Optional[threading.Thread] = None
 daily_stats_date = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
 daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
 daily_summary_sent_date: Optional[str] = None
+session_started_notice_date: Optional[str] = None
 pending_result_deliveries: list[dict[str, Any]] = []
 result_delivery_next_retry_at = 0.0
 result_delivery_last_error: Optional[str] = None
@@ -2069,6 +2060,21 @@ def send_search_finished_to_telegram() -> None:
     })
 
 
+def maybe_send_session_started_notice(now: Optional[float] = None) -> None:
+    global session_started_notice_date
+    now = time.time() if now is None else now
+    if not in_signal_window():
+        return
+    session_date = datetime.fromtimestamp(now, ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
+    if session_started_notice_date == session_date:
+        return
+    session_started_notice_date = session_date
+    try:
+        send_session_started_to_telegram()
+    except Exception as exc:
+        log.warning("Не удалось отправить приветствие начала сессии: %s", type(exc).__name__)
+
+
 def send_result_to_telegram(signal: dict[str, Any]) -> None:
     pair = signal["pair"].replace(" ", "").upper()
     if signal.get("result") == "UNKNOWN":
@@ -2161,18 +2167,6 @@ def send_startup_safety_pause_to_telegram(minutes: int) -> None:
             "⏸ ПРОВЕРКА ПОСЛЕ ПЕРЕЗАПУСКА\n\n"
             f"Новые сигналы приостановлены на {minutes} мин. "
             "Бот проверит свежие данные нескольких пар и возобновит поиск после подтверждения рынка."
-        ),
-    })
-
-
-def send_incomplete_series_to_telegram(signal: dict[str, Any]) -> None:
-    if not TELEGRAM_CHAT_ID:
-        return
-    telegram_request("/send-message", {
-        "text": (
-            f"⏹ СЕРИЯ ОСТАНОВЛЕНА • {signal['pair'].replace('/', ' ')} OTC\n\n"
-            "Следующий сигнал не создан: рабочее время завершилось. "
-            "Проигрыш за завершённую попытку учтён в статистике."
         ),
     })
 
@@ -2558,10 +2552,6 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             signal["pair"],
         )
         deliver_terminal_result(signal, now)
-        try:
-            send_incomplete_series_to_telegram(signal)
-        except Exception as exc:
-            log.warning("Не вдалося повідомити про незавершену серію: %s", type(exc).__name__)
         with signal_state_lock:
             active_signal = None
         record_signal_result(signal, "LOSS", now)
@@ -2668,6 +2658,7 @@ def signal_loop() -> None:
         retry_result_deliveries(now)
         if not connected:
             continue
+        maybe_send_session_started_notice(now)
         with signal_state_lock:
             current = active_signal
         if current and current.get("overlay_waiting"):

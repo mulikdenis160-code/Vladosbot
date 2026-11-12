@@ -48,7 +48,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             "send_pause": bot.send_market_pause_to_telegram,
             "send_resume": bot.send_market_resume_to_telegram,
             "send_startup_pause": bot.send_startup_safety_pause_to_telegram,
-            "send_incomplete": bot.send_incomplete_series_to_telegram,
+            "session_started_notice_date": bot.session_started_notice_date,
             "send_overlay_preparation": bot.send_overlay_preparation_to_telegram,
             "send_overlay_cancelled": bot.send_overlay_cancelled_to_telegram,
             "market_snapshot": bot.market_snapshot,
@@ -109,7 +109,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.send_market_pause_to_telegram = self.saved["send_pause"]
         bot.send_market_resume_to_telegram = self.saved["send_resume"]
         bot.send_startup_safety_pause_to_telegram = self.saved["send_startup_pause"]
-        bot.send_incomplete_series_to_telegram = self.saved["send_incomplete"]
+        bot.session_started_notice_date = self.saved["session_started_notice_date"]
         bot.send_overlay_preparation_to_telegram = self.saved["send_overlay_preparation"]
         bot.send_overlay_cancelled_to_telegram = self.saved["send_overlay_cancelled"]
         bot.market_snapshot = self.saved["market_snapshot"]
@@ -401,14 +401,13 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertTrue(bot.monitor_market_pause(pause_end))
         self.assertGreater(bot.market_pause_until, pause_end)
 
-    def test_incomplete_overlay_outside_working_window_is_not_a_result(self):
-        finals, recorded, incomplete = [], [], []
+    def test_overlay_outside_working_window_keeps_result_without_stop_notice(self):
+        finals, recorded = [], []
         bot.in_signal_window = lambda: False
         bot.send_result_to_telegram = lambda value: finals.append(deepcopy(value))
         bot.record_signal_result = lambda value, *args: recorded.append(
             {**deepcopy(value), "result": args[0] if args else value["result"]}
         )
-        bot.send_incomplete_series_to_telegram = lambda value: incomplete.append(deepcopy(value))
         current = signal(0)
         bot.active_signal = current
 
@@ -416,8 +415,8 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         self.assertEqual([item["result"] for item in finals], ["LOSS"])
         self.assertEqual([item["result"] for item in recorded], ["LOSS"])
-        self.assertEqual(len(incomplete), 1)
         self.assertIsNone(bot.active_signal)
+        self.assertFalse(hasattr(bot, "send_incomplete_series_to_telegram"))
 
     def test_known_loss_is_not_lost_when_later_overlay_is_unknown(self):
         recorded, finals = [], []
@@ -605,6 +604,21 @@ class OverlayAndPauseTests(unittest.TestCase):
             "Ищу сигнал.",
         )
         self.assertIsNone(bot.last_signal_outcome)
+
+    def test_session_start_greeting_is_sent_once_per_day(self):
+        requests = []
+        bot.in_signal_window = lambda: True
+        bot.session_started_notice_date = None
+        bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
+            "ok": True,
+        }
+
+        bot.maybe_send_session_started_notice(100)
+        bot.maybe_send_session_started_notice(101)
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0][0], "/send-message")
+        self.assertEqual(requests[0][1]["text"], "Начинаю сессию.")
 
     def test_entry_confirmation_is_only_the_word_entered(self):
         requests = []
