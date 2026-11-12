@@ -44,6 +44,8 @@ CANDLE_TIMEOUT_SEC = int(os.getenv("CANDLE_FETCH_TIMEOUT_SEC", "12"))
 SIGNAL_DURATION_SEC = 2 * 60
 SIGNAL_SEARCH_TIMEOUT_SEC = int(os.getenv("SIGNAL_SEARCH_TIMEOUT_SEC", "180"))
 SIGNAL_RETRY_DELAY_SEC = max(30, int(os.getenv("SIGNAL_RETRY_DELAY_SEC", "180")))
+SESSION_PAIR_DELAY_SEC = 2 * 60
+FIRST_OVERLAY_DELAY_SEC = 2 * 60
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
 GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC", "15"))
 SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
@@ -177,6 +179,8 @@ search_started_at = 0.0
 scan_cursor = 0
 gemini_next_request_at = 0.0
 signal_thread: Optional[threading.Thread] = None
+session_initial_search_pending = False
+suppress_next_search_notice = False
 daily_stats_date = datetime.now(ZoneInfo(SIGNAL_TIMEZONE)).date().isoformat()
 daily_stats = {"total": 0, "WIN": 0, "LOSS": 0, "DRAW": 0, "UNKNOWN": 0}
 daily_summary_sent_date: Optional[str] = None
@@ -610,7 +614,7 @@ def send_search_to_telegram() -> None:
     global last_signal_outcome
     if not TELEGRAM_CHAT_ID:
         return
-    telegram_request("/send-message", {"text": "Ищу сигнал."})
+    telegram_request("/send-message", {"text": "Меняю пару, ищу следующую ситуацию."})
     last_signal_outcome = None
 
 
@@ -618,6 +622,14 @@ def send_overlay_preparation_to_telegram(
     overlay_number: int, lost_pair: Optional[str] = None
 ) -> None:
     if not TELEGRAM_CHAT_ID:
+        return
+    if overlay_number == 1:
+        telegram_request("/send-message", {
+            "text": (
+                "Минус. Меняю пару, ищу следующую ситуацию, готовлю первое "
+                "перекрытие, буду заходить на 2%."
+            ),
+        })
         return
     ordinal = {1: "первому", 2: "второму", 3: "третьему"}.get(
         overlay_number, f"{overlay_number}-е"
@@ -659,7 +671,19 @@ def send_search_finished_to_telegram() -> None:
 def send_session_started_to_telegram() -> None:
     if not TELEGRAM_CHAT_ID:
         return
-    telegram_request("/send-message", {"text": "Начинаю сессию."})
+    telegram_request(
+        "/send-message",
+        {"text": "Начинаю торговую сессию! Ищу валютную пару, подбираю хорошую ситуацию."},
+    )
+
+
+def send_overlay_win_reset_to_telegram() -> None:
+    if not TELEGRAM_CHAT_ID:
+        return
+    telegram_request(
+        "/send-message",
+        {"text": "Меняю пару, ищу следующую ситуацию, возвращаюсь на 1%."},
+    )
 
 
 def send_result_to_telegram(signal: dict[str, Any]) -> None:
@@ -2044,7 +2068,7 @@ def send_search_to_telegram() -> None:
     global last_signal_outcome
     if not TELEGRAM_CHAT_ID:
         return
-    telegram_request("/send-message", {"text": "Ищу сигнал."})
+    telegram_request("/send-message", {"text": "Меняю пару, ищу следующую ситуацию."})
     last_signal_outcome = None
 
 
@@ -2061,7 +2085,8 @@ def send_search_finished_to_telegram() -> None:
 
 
 def maybe_send_session_started_notice(now: Optional[float] = None) -> None:
-    global session_started_notice_date
+    global session_started_notice_date, next_signal_at, session_initial_search_pending
+    global suppress_next_search_notice, search_started_at
     now = time.time() if now is None else now
     if not in_signal_window():
         return
@@ -2069,6 +2094,10 @@ def maybe_send_session_started_notice(now: Optional[float] = None) -> None:
     if session_started_notice_date == session_date:
         return
     session_started_notice_date = session_date
+    session_initial_search_pending = True
+    suppress_next_search_notice = False
+    search_started_at = 0.0
+    next_signal_at = now + SESSION_PAIR_DELAY_SEC
     try:
         send_session_started_to_telegram()
     except Exception as exc:
@@ -2433,6 +2462,7 @@ def format_result(signal: dict[str, Any]) -> str:
 
 def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> None:
     global active_signal, pending_signal, next_signal_at, signal_searching, last_signal_outcome
+    global suppress_next_search_notice
     log.info(
         "Результат спроби: %s %s entry=%s close=%s attempt=%s",
         signal["pair"], outcome, signal["entry_price"],
@@ -2464,7 +2494,11 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             except Exception as exc:
                 log.warning("Не удалось сообщить о подготовке перекрытия: %s", type(exc).__name__)
             signal["overlay_waiting"] = True
-            signal["overlay_due_at"] = now + SIGNAL_RETRY_DELAY_SEC
+            overlay_delay = (
+                FIRST_OVERLAY_DELAY_SEC
+                if signal["attempt"] == 0 else SIGNAL_RETRY_DELAY_SEC
+            )
+            signal["overlay_due_at"] = now + overlay_delay
             with signal_state_lock:
                 active_signal = signal
                 pending_signal = None
@@ -2472,17 +2506,21 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
             persist_signal_state()
             log.info(
                 "Следующий сигнал-перекрытие %s/%s запланирован через %ss",
-                signal["attempt"] + 1, MAX_OVERLAYS, SIGNAL_RETRY_DELAY_SEC,
+                signal["attempt"] + 1, MAX_OVERLAYS, overlay_delay,
             )
             return
         if now < float(signal.get("overlay_due_at", now)):
             return
         signal.pop("overlay_waiting", None)
         signal.pop("overlay_due_at", None)
-        try:
-            send_search_to_telegram()
-        except Exception as exc:
-            log.warning("Не удалось сообщить о поиске сигнала для перекрытия: %s", type(exc).__name__)
+        if signal["attempt"] > 0:
+            try:
+                send_search_to_telegram()
+            except Exception as exc:
+                log.warning(
+                    "Не удалось сообщить о поиске следующего перекрытия: %s",
+                    type(exc).__name__,
+                )
         excluded_pairs = set(signal.get("series_pairs") or [signal["raw_pair"]])
         with signal_state_lock:
             signal_searching = True
@@ -2561,6 +2599,12 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
         return
     record_signal_result(signal, outcome, now)
     deliver_terminal_result(signal, now)
+    if outcome == "WIN" and int(signal.get("attempt", 0)) > 0:
+        try:
+            send_overlay_win_reset_to_telegram()
+            suppress_next_search_notice = True
+        except Exception as exc:
+            log.warning("Не удалось сообщить о возврате к ставке 1%%: %s", type(exc).__name__)
 
 
 def queue_result_delivery(signal: dict[str, Any], now: float, error: Exception) -> None:
@@ -2653,6 +2697,7 @@ def finalize_pending_signal(
 
 def signal_loop() -> None:
     global active_signal, pending_signal, next_signal_at, search_started_at
+    global session_initial_search_pending, suppress_next_search_notice
     while not signal_stop.wait(1):
         now = time.time()
         retry_result_deliveries(now)
@@ -2723,10 +2768,14 @@ def signal_loop() -> None:
             continue
         if not search_started_at:
             search_started_at = now
-            try:
-                send_search_to_telegram()
-            except Exception as exc:
-                log.warning("Не вдалося надіслати повідомлення про пошук: %s", type(exc).__name__)
+            skip_notice = session_initial_search_pending or suppress_next_search_notice
+            session_initial_search_pending = False
+            suppress_next_search_notice = False
+            if not skip_notice:
+                try:
+                    send_search_to_telegram()
+                except Exception as exc:
+                    log.warning("Не вдалося надіслати повідомлення про пошук: %s", type(exc).__name__)
         candidate = generate_best_signal()
         if candidate is None:
             if now - search_started_at >= SIGNAL_SEARCH_TIMEOUT_SEC:

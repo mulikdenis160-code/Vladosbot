@@ -33,6 +33,8 @@ class OverlayAndPauseTests(unittest.TestCase):
             "last_signal_outcome": bot.last_signal_outcome,
             "next_signal_at": bot.next_signal_at,
             "signal_retry_delay": bot.SIGNAL_RETRY_DELAY_SEC,
+            "session_initial_search_pending": bot.session_initial_search_pending,
+            "suppress_next_search_notice": bot.suppress_next_search_notice,
             "pause_until": bot.market_pause_until,
             "pause_started_at": bot.market_pause_started_at,
             "pause_last_check": bot.market_pause_last_check,
@@ -65,6 +67,8 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.result_delivery_last_error = None
         bot.signal_searching = False
         bot.last_signal_outcome = None
+        bot.session_initial_search_pending = False
+        bot.suppress_next_search_notice = False
         self.overlay_preparations = []
         bot.send_overlay_preparation_to_telegram = (
             lambda number, pair=None: self.overlay_preparations.append(
@@ -94,6 +98,8 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.last_signal_outcome = self.saved["last_signal_outcome"]
         bot.next_signal_at = self.saved["next_signal_at"]
         bot.SIGNAL_RETRY_DELAY_SEC = self.saved["signal_retry_delay"]
+        bot.session_initial_search_pending = self.saved["session_initial_search_pending"]
+        bot.suppress_next_search_notice = self.saved["suppress_next_search_notice"]
         bot.market_pause_until = self.saved["pause_until"]
         bot.market_pause_started_at = self.saved["pause_started_at"]
         bot.market_pause_last_check = self.saved["pause_last_check"]
@@ -171,11 +177,15 @@ class OverlayAndPauseTests(unittest.TestCase):
             bot.handle_signal_outcome(current, "LOSS", at)
             self.assertIs(bot.active_signal, current)
             self.assertTrue(current["overlay_waiting"])
-            self.assertEqual(bot.next_signal_at, at + 180)
-            bot.handle_signal_outcome(current, "LOSS", at + 179)
+            delay = (
+                bot.FIRST_OVERLAY_DELAY_SEC
+                if current["attempt"] == 0 else bot.SIGNAL_RETRY_DELAY_SEC
+            )
+            self.assertEqual(bot.next_signal_at, at + delay)
+            bot.handle_signal_outcome(current, "LOSS", at + delay - 1)
             self.assertIs(bot.active_signal, current)
             self.assertIsNone(bot.pending_signal)
-            bot.handle_signal_outcome(current, "LOSS", at + 180)
+            bot.handle_signal_outcome(current, "LOSS", at + delay)
 
         try:
             first = signal(0)
@@ -252,7 +262,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             self.assertIs(current, bot.active_signal)
             self.assertTrue(current["overlay_waiting"])
 
-            bot.handle_signal_outcome(current, "LOSS", 280)
+            bot.handle_signal_outcome(current, "LOSS", 220)
 
             self.assertIsNone(bot.pending_signal)
             self.assertIsNone(bot.active_signal)
@@ -588,7 +598,10 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.send_search_to_telegram()
 
         self.assertEqual([path for path, _ in requests], ["/send-message"])
-        self.assertEqual(requests[0][1]["text"], "Ищу сигнал.")
+        self.assertEqual(
+            requests[0][1]["text"],
+            "Меняю пару, ищу следующую ситуацию.",
+        )
 
     def test_win_search_notice_stays_simple(self):
         requests = []
@@ -601,7 +614,7 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         self.assertEqual(
             requests[0][1]["text"],
-            "Ищу сигнал.",
+            "Меняю пару, ищу следующую ситуацию.",
         )
         self.assertIsNone(bot.last_signal_outcome)
 
@@ -618,7 +631,12 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         self.assertEqual(len(requests), 1)
         self.assertEqual(requests[0][0], "/send-message")
-        self.assertEqual(requests[0][1]["text"], "Начинаю сессию.")
+        self.assertEqual(
+            requests[0][1]["text"],
+            "Начинаю торговую сессию! Ищу валютную пару, подбираю хорошую ситуацию.",
+        )
+        self.assertEqual(bot.next_signal_at, 100 + bot.SESSION_PAIR_DELAY_SEC)
+        self.assertTrue(bot.session_initial_search_pending)
 
     def test_entry_confirmation_is_only_the_word_entered(self):
         requests = []
@@ -649,7 +667,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             ],
         )
 
-    def test_overlay_preparation_warns_before_stake_is_sent(self):
+    def test_first_overlay_preparation_names_two_percent_stake(self):
         requests = []
         bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
             "ok": True, "message_id": 129,
@@ -663,15 +681,16 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(
             texts,
             [
-                "Внимание! Переходим к первому перекрытию 1/3 по EUR USD OTC. "
-                "Сначала ищу новый сигнал; ставку сообщу отдельно.",
+                "Минус. Меняю пару, ищу следующую ситуацию, готовлю первое "
+                "перекрытие, буду заходить на 2%.",
                 "Внимание! Переходим к второму перекрытию 2/3 по GBP USD OTC. "
                 "Сначала ищу новый сигнал; ставку сообщу отдельно.",
                 "Внимание! Переходим к третьему перекрытию 3/3 по USD JPY OTC. "
                 "Сначала ищу новый сигнал; ставку сообщу отдельно.",
             ],
         )
-        self.assertTrue(all("%" not in text for text in texts))
+        self.assertIn("2%", texts[0])
+        self.assertTrue(all("%" not in text for text in texts[1:]))
 
     def test_terminal_loss_does_not_create_market_pause(self):
         finals, pauses = [], []
@@ -689,6 +708,25 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(pauses, [])
         self.assertEqual(bot.market_pause_until, 0)
         self.assertEqual(bot.next_signal_at, 100 + bot.SIGNAL_RETRY_DELAY_SEC)
+
+    def test_winning_overlay_announces_return_to_one_percent(self):
+        requests = []
+        bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {
+            "ok": True,
+        }
+        bot.record_signal_result = lambda value, *args: None
+        bot.deliver_terminal_result = lambda value, now: True
+        current = signal(1)
+        current["result"] = "WIN"
+        bot.active_signal = current
+
+        bot.handle_signal_outcome(current, "WIN", 100)
+
+        self.assertEqual(
+            [payload["text"] for _, payload in requests],
+            ["Меняю пару, ищу следующую ситуацию, возвращаюсь на 1%."],
+        )
+        self.assertTrue(bot.suppress_next_search_notice)
 
     def test_search_is_blocked_while_a_series_or_search_is_active(self):
         calls = []
