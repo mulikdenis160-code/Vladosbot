@@ -701,7 +701,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertEqual(requests[0][0], "/send-message")
         self.assertEqual(
             requests[0][1]["text"],
-            "Начинаю торговую сессию! Ищу валютную пару, подбираю хорошую ситуацию.",
+            "Всем привет! Начинаю сессию. Ищу валютную пару, подбираю хорошую ситуацию.",
         )
         self.assertEqual(bot.next_signal_at, 100 + bot.SESSION_PAIR_DELAY_SEC)
         self.assertTrue(bot.session_initial_search_pending)
