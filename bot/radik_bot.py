@@ -2756,6 +2756,8 @@ def signal_loop() -> None:
                     send_search_to_telegram()
                 except Exception as exc:
                     log.warning("Не вдалося надіслати повідомлення про пошук: %s", type(exc).__name__)
+                next_signal_at = time.time() + SESSION_PAIR_DELAY_SEC
+                continue
         candidate = generate_best_signal()
         if candidate is None:
             if now - search_started_at >= SIGNAL_SEARCH_TIMEOUT_SEC:

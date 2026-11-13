@@ -615,6 +615,42 @@ class OverlayAndPauseTests(unittest.TestCase):
         )
         self.assertIsNone(bot.last_signal_outcome)
 
+    def test_search_notice_waits_two_minutes_before_generating_signal(self):
+        class StopAfterOneTick:
+            def __init__(self):
+                self.ticks = 0
+
+            def wait(self, timeout):
+                self.ticks += 1
+                return self.ticks > 1
+
+        notices = []
+        generated = []
+        with (
+            patch.object(bot, "signal_stop", StopAfterOneTick()),
+            patch.object(bot, "connected", True),
+            patch.object(bot, "active_signal", None),
+            patch.object(bot, "pending_signal", None),
+            patch.object(bot, "next_signal_at", 0),
+            patch.object(bot, "search_started_at", 0),
+            patch.object(bot, "session_initial_search_pending", False),
+            patch.object(bot, "suppress_next_search_notice", False),
+            patch.object(bot, "market_pause_until", 0),
+            patch.object(bot, "retry_result_deliveries"),
+            patch.object(bot, "maybe_send_session_started_notice"),
+            patch.object(bot, "maybe_send_daily_summary"),
+            patch.object(bot, "in_signal_window", return_value=True),
+            patch.object(bot, "signal_is_in_progress", return_value=False),
+            patch.object(bot, "send_search_to_telegram", side_effect=lambda: notices.append(True)),
+            patch.object(bot, "generate_best_signal", side_effect=lambda: generated.append(True)),
+            patch("bot.radik_bot.time.time", return_value=100),
+        ):
+            bot.signal_loop()
+
+            self.assertEqual(notices, [True])
+            self.assertEqual(generated, [])
+            self.assertEqual(bot.next_signal_at, 100 + bot.SESSION_PAIR_DELAY_SEC)
+
     def test_session_start_greeting_is_sent_once_per_day(self):
         requests = []
         bot.in_signal_window = lambda: True
