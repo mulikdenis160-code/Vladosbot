@@ -716,6 +716,27 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         self.assertEqual(requests, [("/send-message", {"text": "Зашел"})])
 
+    def test_entry_confirmation_bypasses_the_two_minute_cooldown(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"ok": True, "message_id": 132}
+
+        bot.last_telegram_message_at = bot.time.monotonic()
+        with (
+            patch("bot.radik_bot.time.sleep") as sleep,
+            patch("bot.radik_bot.requests.post", return_value=Response()) as post,
+        ):
+            bot.send_entry_confirmation(signal(0))
+
+        sleep.assert_not_called()
+        self.assertEqual(post.call_args.kwargs["json"], {"text": "Зашел"})
+        self.assertGreaterEqual(
+            bot.time.monotonic() - bot.last_telegram_message_at, 0
+        )
+
     def test_overlay_entry_confirmation_names_the_overlay(self):
         requests = []
         bot.telegram_request = lambda path, payload: requests.append((path, payload)) or {

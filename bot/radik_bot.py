@@ -197,12 +197,12 @@ last_telegram_message_sent_at = 0.0
 
 
 @contextmanager
-def telegram_message_slot():
+def telegram_message_slot(enforce_interval: bool = True):
     """Serialize Telegram messages and enforce the configured minimum gap."""
     global last_telegram_message_at
     with telegram_message_lock:
         depth = getattr(telegram_message_context, "depth", 0)
-        if depth == 0 and last_telegram_message_at:
+        if enforce_interval and depth == 0 and last_telegram_message_at:
             remaining = TELEGRAM_MIN_MESSAGE_INTERVAL_SEC - (
                 time.monotonic() - last_telegram_message_at
             )
@@ -1061,7 +1061,8 @@ def send_entry_confirmation(signal: dict[str, Any]) -> None:
         f"Зашел на перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%"
         if attempt > 0 else "Зашел"
     )
-    delivery = telegram_request("/send-message", {"text": text})
+    with telegram_message_slot(enforce_interval=False):
+        delivery = telegram_request("/send-message", {"text": text})
     log.info(
         "Подтверждение входа %s доставлено Telegram message_id=%s",
         signal["pair"], delivery.get("message_id", "невідомо"),
@@ -2476,7 +2477,8 @@ def send_entry_confirmation(signal: dict[str, Any]) -> None:
         f"Зашел на перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%"
         if attempt > 0 else "Зашел"
     )
-    delivery = telegram_request("/send-message", {"text": text})
+    with telegram_message_slot(enforce_interval=False):
+        delivery = telegram_request("/send-message", {"text": text})
     log.info(
         "Подтверждение входа %s доставлено Telegram message_id=%s",
         signal["pair"], delivery.get("message_id", "невідомо"),
