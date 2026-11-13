@@ -18,6 +18,7 @@ import io
 import math
 import threading
 import time
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, time as clock_time, timedelta
 from pathlib import Path
@@ -48,6 +49,7 @@ SESSION_PAIR_DELAY_SEC = 2 * 60
 OVERLAY_SIGNAL_DELAY_SEC = 2 * 60
 SIGNAL_SCAN_PAIRS = max(1, int(os.getenv("SIGNAL_SCAN_PAIRS", "1")))
 GEMINI_MIN_REQUEST_INTERVAL_SEC = int(os.getenv("GEMINI_MIN_REQUEST_INTERVAL_SEC", "15"))
+TELEGRAM_MIN_MESSAGE_INTERVAL_SEC = 2 * 60
 SIGNAL_ENTRY_NOTICE_SEC = max(5, int(os.getenv("SIGNAL_ENTRY_NOTICE_SEC", "15")))
 PRICE_RETRY_TIMEOUT_SEC = max(1, int(os.getenv("PRICE_RETRY_TIMEOUT_SEC", "15")))
 OVERLAY_STAKE_PERCENTS = (2, 4, 8)
@@ -188,6 +190,30 @@ pending_result_deliveries: list[dict[str, Any]] = []
 result_delivery_next_retry_at = 0.0
 result_delivery_last_error: Optional[str] = None
 RESULT_DELIVERY_RETRY_SEC = 60
+telegram_message_lock = threading.RLock()
+telegram_message_context = threading.local()
+last_telegram_message_at = 0.0
+last_telegram_message_sent_at = 0.0
+
+
+@contextmanager
+def telegram_message_slot():
+    """Serialize Telegram messages and enforce the configured minimum gap."""
+    global last_telegram_message_at
+    with telegram_message_lock:
+        depth = getattr(telegram_message_context, "depth", 0)
+        if depth == 0 and last_telegram_message_at:
+            remaining = TELEGRAM_MIN_MESSAGE_INTERVAL_SEC - (
+                time.monotonic() - last_telegram_message_at
+            )
+            if remaining > 0:
+                log.info("Пауза перед сообщением Telegram: %.1f сек.", remaining)
+                time.sleep(remaining)
+        telegram_message_context.depth = depth + 1
+        try:
+            yield
+        finally:
+            telegram_message_context.depth = depth
 
 
 def persist_signal_state() -> None:
@@ -522,13 +548,30 @@ def record_signal_result(
 
 
 def telegram_request(path: str, payload: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
+    if path == "/send-message" and not getattr(telegram_message_context, "depth", 0):
+        with telegram_message_slot():
+            return telegram_request(path, payload, timeout)
+
+    global last_telegram_message_at, last_telegram_message_sent_at
     if path == "/send-message" and isinstance(payload.get("text"), str):
         payload = {**payload, "text": payload["text"].rstrip().rstrip(".").rstrip()}
-    response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
-    response.raise_for_status()
-    result = response.json()
-    if not result.get("ok"):
-        raise RuntimeError(result.get("error", "Telegram bridge error"))
+    if path == "/send-message":
+        # Record the attempt before the request: on a timeout, Telegram may still
+        # have accepted it, so sending another message immediately could duplicate it.
+        last_telegram_message_at = time.monotonic()
+    try:
+        response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
+        response.raise_for_status()
+        result = response.json()
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error", "Telegram bridge error"))
+    except Exception:
+        if path == "/send-message":
+            last_telegram_message_at = time.monotonic()
+        raise
+    if path == "/send-message":
+        last_telegram_message_at = time.monotonic()
+        last_telegram_message_sent_at = time.time()
     return result
 
 
@@ -1975,13 +2018,30 @@ def record_signal_result(
 
 
 def telegram_request(path: str, payload: dict[str, Any], timeout: int = 10) -> dict[str, Any]:
+    if path == "/send-message" and not getattr(telegram_message_context, "depth", 0):
+        with telegram_message_slot():
+            return telegram_request(path, payload, timeout)
+
+    global last_telegram_message_at, last_telegram_message_sent_at
     if path == "/send-message" and isinstance(payload.get("text"), str):
         payload = {**payload, "text": payload["text"].rstrip().rstrip(".").rstrip()}
-    response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
-    response.raise_for_status()
-    result = response.json()
-    if not result.get("ok"):
-        raise RuntimeError(result.get("error", "Telegram bridge error"))
+    if path == "/send-message":
+        # Telegram may accept a request even if the client times out. Enforce
+        # the gap from the attempt to avoid accidentally sending duplicates.
+        last_telegram_message_at = time.monotonic()
+    try:
+        response = requests.post(f"{TELEGRAM_BRIDGE_URL}{path}", json=payload, timeout=timeout)
+        response.raise_for_status()
+        result = response.json()
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error", "Telegram bridge error"))
+    except Exception:
+        if path == "/send-message":
+            last_telegram_message_at = time.monotonic()
+        raise
+    if path == "/send-message":
+        last_telegram_message_at = time.monotonic()
+        last_telegram_message_sent_at = time.time()
     return result
 
 
@@ -2031,26 +2091,33 @@ def send_signal_to_telegram(
     if not TELEGRAM_CHAT_ID:
         log.warning("TELEGRAM_CHAT_ID не настроен, сигнал останется только в API")
         return
-    pair = signal["pair"].replace(" ", "").upper()
-    direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
-    entry_at = signal.get("entry_at")
-    remaining = seconds_until_entry(entry_at)
-    entry_line = (
-        f"Захожу с новой свечи через {remaining} сек."
-        if remaining is not None else "Захожу с новой свечи."
-    )
-    attempt = int(signal.get("attempt", 0))
-    overlay_line = (
-        f"Перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%\n"
-        if attempt > 0 else ""
-    )
-    text = (
-        f"{pair} OTC\n"
-        f"{overlay_line}"
-        f"На {signal_duration_label()} {direction}\n"
-        f"{entry_line}"
-    )
-    delivery = telegram_request("/send-message", {"text": text})
+    with telegram_message_slot():
+        entry_at = signal.get("entry_at")
+        if (
+            entry_at is not None
+            and float(entry_at) - time.time() < SIGNAL_ENTRY_NOTICE_SEC
+        ):
+            signal["entry_at"] = next_candle_start(time.time())
+            persist_signal_state()
+        pair = signal["pair"].replace(" ", "").upper()
+        direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
+        remaining = seconds_until_entry(signal.get("entry_at"))
+        entry_line = (
+            f"Захожу с новой свечи через {remaining} сек."
+            if remaining is not None else "Захожу с новой свечи."
+        )
+        attempt = int(signal.get("attempt", 0))
+        overlay_line = (
+            f"Перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%\n"
+            if attempt > 0 else ""
+        )
+        text = (
+            f"{pair} OTC\n"
+            f"{overlay_line}"
+            f"На {signal_duration_label()} {direction}\n"
+            f"{entry_line}"
+        )
+        delivery = telegram_request("/send-message", {"text": text})
     log.info(
         "Сигнал %s (попытка %s) подтверждён Telegram message_id=%s",
         signal["pair"], attempt + 1, delivery.get("message_id", "невідомо"),
@@ -2497,7 +2564,9 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
                 return
             signal["overlay_waiting"] = True
             overlay_delay = OVERLAY_SIGNAL_DELAY_SEC
-            signal["overlay_due_at"] = now + overlay_delay
+            signal["overlay_due_at"] = (
+                max(now, last_telegram_message_sent_at) + overlay_delay
+            )
             with signal_state_lock:
                 active_signal = signal
                 pending_signal = None

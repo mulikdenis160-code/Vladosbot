@@ -56,6 +56,8 @@ class OverlayAndPauseTests(unittest.TestCase):
             "market_snapshot": bot.market_snapshot,
             "persist_signal_state": bot.persist_signal_state,
             "telegram_request": bot.telegram_request,
+            "last_telegram_message_at": bot.last_telegram_message_at,
+            "last_telegram_message_sent_at": bot.last_telegram_message_sent_at,
             "telegram_chat_id": bot.TELEGRAM_CHAT_ID,
             "telegram_public_base_url": bot.TELEGRAM_PUBLIC_BASE_URL,
             "max_overlays": bot.MAX_OVERLAYS,
@@ -63,6 +65,8 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.active_signal = None
         bot.pending_signal = None
         bot.pending_result_deliveries = []
+        bot.last_telegram_message_at = 0.0
+        bot.last_telegram_message_sent_at = 0.0
         bot.result_delivery_next_retry_at = 0
         bot.result_delivery_last_error = None
         bot.signal_searching = False
@@ -121,6 +125,8 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.market_snapshot = self.saved["market_snapshot"]
         bot.persist_signal_state = self.saved["persist_signal_state"]
         bot.telegram_request = self.saved["telegram_request"]
+        bot.last_telegram_message_at = self.saved["last_telegram_message_at"]
+        bot.last_telegram_message_sent_at = self.saved["last_telegram_message_sent_at"]
         bot.TELEGRAM_CHAT_ID = self.saved["telegram_chat_id"]
         bot.TELEGRAM_PUBLIC_BASE_URL = self.saved["telegram_public_base_url"]
         bot.MAX_OVERLAYS = self.saved["max_overlays"]
@@ -321,6 +327,24 @@ class OverlayAndPauseTests(unittest.TestCase):
             bot.telegram_request("/send-message", {"text": "Текст сообщения..."})
 
         self.assertEqual(post.call_args.kwargs["json"]["text"], "Текст сообщения")
+
+    def test_telegram_messages_wait_for_the_two_minute_gap(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"ok": True}
+
+        bot.last_telegram_message_at = 50.0
+        with (
+            patch("bot.radik_bot.time.monotonic", return_value=100.0),
+            patch("bot.radik_bot.time.sleep") as sleep,
+            patch("bot.radik_bot.requests.post", return_value=Response()),
+        ):
+            bot.telegram_request("/send-message", {"text": "Следующее сообщение"})
+
+        sleep.assert_called_once_with(bot.TELEGRAM_MIN_MESSAGE_INTERVAL_SEC - 50.0)
 
     def test_equal_close_price_is_counted_as_loss_not_unknown_or_draw(self):
         current = signal(0)
