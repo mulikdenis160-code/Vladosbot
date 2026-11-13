@@ -620,9 +620,10 @@ def send_search_to_telegram() -> None:
 
 def send_overlay_preparation_to_telegram(
     overlay_number: int, lost_pair: Optional[str] = None
-) -> None:
+) -> bool:
     if not TELEGRAM_CHAT_ID:
-        return
+        log.error("TELEGRAM_CHAT_ID не настроен, предупреждение о перекрытии не отправлено")
+        return False
     ordinal = {1: "первое", 2: "второе", 3: "третье"}.get(
         overlay_number, f"{overlay_number}-е"
     )
@@ -637,6 +638,7 @@ def send_overlay_preparation_to_telegram(
         "Сообщение о перекрытии %s/%s подтверждено Telegram message_id=%s",
         overlay_number, MAX_OVERLAYS, delivery.get("message_id", "невідомо"),
     )
+    return True
 
 
 def send_overlay_cancelled_to_telegram() -> None:
@@ -2477,13 +2479,22 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
     has_overlay_left = signal["attempt"] < MAX_OVERLAYS
     if outcome == "LOSS" and has_overlay_left and in_signal_window():
         if not signal.get("overlay_waiting"):
+            preparation_sent = False
             try:
-                send_overlay_preparation_to_telegram(
+                preparation_sent = send_overlay_preparation_to_telegram(
                     signal["attempt"] + 1,
                     signal["pair"],
                 )
             except Exception as exc:
                 log.warning("Не удалось сообщить о подготовке перекрытия: %s", type(exc).__name__)
+            if not preparation_sent:
+                log.error(
+                    "Перекрытие %s для %s отменено: предупреждение не доставлено",
+                    signal["attempt"] + 1, signal["pair"],
+                )
+                record_signal_result(signal, "LOSS", now)
+                deliver_terminal_result(signal, now)
+                return
             signal["overlay_waiting"] = True
             overlay_delay = OVERLAY_SIGNAL_DELAY_SEC
             signal["overlay_due_at"] = now + overlay_delay
