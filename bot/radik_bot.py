@@ -2542,16 +2542,19 @@ def handle_signal_outcome(signal: dict[str, Any], outcome: str, now: float) -> N
                 active_signal = None
                 pending_signal = replacement
         else:
-            log.info(
-                "Після LOSS %s не знайдено якісної альтернативної пари; догін не створюється",
-                signal["pair"],
+            retry_delay = max(5, SIGNAL_RETRY_DELAY_SEC)
+            signal["overlay_waiting"] = True
+            signal["overlay_due_at"] = now + retry_delay
+            with signal_state_lock:
+                active_signal = signal
+                pending_signal = None
+            next_signal_at = signal["overlay_due_at"]
+            persist_signal_state()
+            log.warning(
+                "После LOSS %s пока нет подходящей другой пары; серия останется "
+                "заблокированной, повторный поиск через %ss",
+                signal["pair"], retry_delay,
             )
-            record_signal_result(signal, "LOSS", now)
-            try:
-                send_overlay_cancelled_to_telegram()
-            except Exception as exc:
-                log.warning("Не удалось сообщить об отмене перекрытия: %s", type(exc).__name__)
-            deliver_terminal_result(signal, now)
             return
         persist_signal_state()
         log.info(

@@ -241,7 +241,7 @@ class OverlayAndPauseTests(unittest.TestCase):
             bot._generate_best_signal = original_generator
             bot.send_search_to_telegram = original_search_notice
 
-    def test_no_alternative_pair_ends_series_after_overlay_wait(self):
+    def test_no_alternative_pair_keeps_series_blocked_for_another_search(self):
         finals, recorded = [], []
         original_search_notice = bot.send_search_to_telegram
         bot.in_signal_window = lambda: True
@@ -262,6 +262,17 @@ class OverlayAndPauseTests(unittest.TestCase):
             bot.handle_signal_outcome(current, "LOSS", 220)
 
             self.assertIsNone(bot.pending_signal)
+            self.assertIs(current, bot.active_signal)
+            self.assertTrue(current["overlay_waiting"])
+            self.assertEqual(bot.next_signal_at, 220 + bot.SIGNAL_RETRY_DELAY_SEC)
+            self.assertEqual(recorded, [])
+            self.assertEqual(finals, [])
+
+            bot.in_signal_window = lambda: False
+            bot.handle_signal_outcome(
+                current, "LOSS", current["overlay_due_at"]
+            )
+
             self.assertIsNone(bot.active_signal)
             self.assertEqual([item["result"] for item in recorded], ["LOSS"])
             self.assertEqual([item["result"] for item in finals], ["LOSS"])
