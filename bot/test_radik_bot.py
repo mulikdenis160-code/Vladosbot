@@ -71,8 +71,8 @@ class OverlayAndPauseTests(unittest.TestCase):
         bot.suppress_next_search_notice = False
         self.overlay_preparations = []
         bot.send_overlay_preparation_to_telegram = (
-            lambda number, pair=None: self.overlay_preparations.append(
-                (number, pair)
+            lambda number, pair=None: (
+                self.overlay_preparations.append((number, pair)) or True
             )
         )
         bot.send_overlay_cancelled_to_telegram = lambda: None
@@ -725,6 +725,44 @@ class OverlayAndPauseTests(unittest.TestCase):
         self.assertIn("2%", texts[0])
         self.assertIn("4%", texts[1])
         self.assertIn("8%", texts[2])
+
+    def test_overlay_is_cancelled_if_preparation_notice_cannot_be_sent(self):
+        recorded, delivered = [], []
+
+        def deliver_result(value, now):
+            delivered.append((value, now))
+            bot.active_signal = None
+            bot.pending_signal = None
+            bot.next_signal_at = now + bot.SIGNAL_RETRY_DELAY_SEC
+            return True
+
+        current = signal(0)
+        bot.active_signal = current
+
+        with (
+            patch.object(bot, "in_signal_window", return_value=True),
+            patch.object(
+                bot,
+                "send_overlay_preparation_to_telegram",
+                side_effect=ConnectionError("Telegram unavailable"),
+            ),
+            patch.object(
+                bot,
+                "record_signal_result",
+                side_effect=lambda value, outcome, *args: recorded.append(
+                    (value, outcome)
+                ),
+            ),
+            patch.object(bot, "deliver_terminal_result", side_effect=deliver_result),
+        ):
+            bot.handle_signal_outcome(current, "LOSS", 100)
+
+        self.assertEqual(recorded, [(current, "LOSS")])
+        self.assertEqual(delivered, [(current, 100)])
+        self.assertFalse(current.get("overlay_waiting"))
+        self.assertIsNone(bot.active_signal)
+        self.assertIsNone(bot.pending_signal)
+        self.assertEqual(bot.next_signal_at, 100 + bot.SIGNAL_RETRY_DELAY_SEC)
 
     def test_terminal_loss_does_not_create_market_pause(self):
         finals, pauses = [], []
