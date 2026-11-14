@@ -621,6 +621,27 @@ def seconds_until_entry(entry_at: Optional[float]) -> Optional[int]:
     return max(0, math.ceil(float(entry_at) - time.time()))
 
 
+def signal_telegram_text(signal: dict[str, Any]) -> str:
+    pair = signal["pair"].replace(" ", "").upper()
+    direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
+    remaining = seconds_until_entry(signal.get("entry_at"))
+    entry_line = (
+        f"Захожу с новой свечи через {remaining} сек."
+        if remaining is not None else "Захожу с новой свечи."
+    )
+    attempt = int(signal.get("attempt", 0))
+    overlay_line = (
+        f"Перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%\n"
+        if attempt > 0 else ""
+    )
+    return (
+        f"{pair} OTC\n"
+        f"{overlay_line}"
+        f"На {signal_duration_label()} {direction}\n"
+        f"{entry_line}"
+    )
+
+
 def send_signal_to_telegram(
     signal: dict[str, Any], caption_prefix: str = "", image_kind: str = "signal"
 ) -> None:
@@ -2100,25 +2121,35 @@ def send_signal_to_telegram(
         ):
             signal["entry_at"] = next_candle_start(time.time())
             persist_signal_state()
-        pair = signal["pair"].replace(" ", "").upper()
-        direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
-        remaining = seconds_until_entry(signal.get("entry_at"))
-        entry_line = (
-            f"Захожу с новой свечи через {remaining} сек."
-            if remaining is not None else "Захожу с новой свечи."
-        )
         attempt = int(signal.get("attempt", 0))
-        overlay_line = (
-            f"Перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%\n"
-            if attempt > 0 else ""
+        delivery = telegram_request(
+            "/send-message", {"text": signal_telegram_text(signal)}
         )
-        text = (
-            f"{pair} OTC\n"
-            f"{overlay_line}"
-            f"На {signal_duration_label()} {direction}\n"
-            f"{entry_line}"
-        )
-        delivery = telegram_request("/send-message", {"text": text})
+        # A slow Telegram request can consume the countdown after the text was
+        # composed. If so, move entry forward and correct the delivered text;
+        # never let the scheduler confirm entry immediately after the signal.
+        entry_at = signal.get("entry_at")
+        if (
+            entry_at is not None
+            and float(entry_at) - time.time() < SIGNAL_ENTRY_NOTICE_SEC
+        ):
+            signal["entry_at"] = next_candle_start(time.time() + 10)
+            persist_signal_state()
+            message_id = delivery.get("message_id")
+            if message_id is not None:
+                try:
+                    telegram_request(
+                        "/edit-message",
+                        {
+                            "message_id": message_id,
+                            "text": signal_telegram_text(signal),
+                        },
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "Не удалось обновить отсчёт после задержки отправки: %s",
+                        type(exc).__name__,
+                    )
     log.info(
         "Сигнал %s (попытка %s) подтверждён Telegram message_id=%s",
         signal["pair"], attempt + 1, delivery.get("message_id", "невідомо"),
