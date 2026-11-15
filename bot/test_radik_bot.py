@@ -737,6 +737,25 @@ class OverlayAndPauseTests(unittest.TestCase):
 
         self.assertEqual(requests, [("/send-message", {"text": "Зашел"})])
 
+    def test_entry_confirmation_waits_until_scheduled_entry_time(self):
+        clock = [100.0]
+        delivered_at = []
+        bot.telegram_request = lambda path, payload: (
+            delivered_at.append(clock[0]) or {"ok": True, "message_id": 133}
+        )
+
+        def advance(seconds):
+            clock[0] += seconds
+
+        with (
+            patch("bot.radik_bot.time.time", side_effect=lambda: clock[0]),
+            patch("bot.radik_bot.time.sleep", side_effect=advance) as sleep,
+        ):
+            bot.send_entry_confirmation({**signal(0), "entry_at": 131.5})
+
+        self.assertGreaterEqual(delivered_at[0], 131.5)
+        self.assertGreaterEqual(sleep.call_count, 1)
+
     def test_entry_confirmation_bypasses_the_two_minute_cooldown(self):
         class Response:
             def raise_for_status(self):

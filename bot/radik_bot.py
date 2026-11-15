@@ -621,6 +621,18 @@ def seconds_until_entry(entry_at: Optional[float]) -> Optional[int]:
     return max(0, math.ceil(float(entry_at) - time.time()))
 
 
+def wait_until_signal_entry(signal: dict[str, Any]) -> None:
+    """Safety guard: never send an entry confirmation before its scheduled time."""
+    entry_at = signal.get("entry_at")
+    if entry_at is None:
+        return
+    while True:
+        remaining = float(entry_at) - time.time()
+        if remaining <= 0:
+            return
+        time.sleep(min(remaining, 1.0))
+
+
 def signal_telegram_text(signal: dict[str, Any]) -> str:
     pair = signal["pair"].replace(" ", "").upper()
     direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
@@ -1077,6 +1089,7 @@ def _generate_best_signal(excluded_pairs: Optional[set[str]] = None) -> Optional
 def send_entry_confirmation(signal: dict[str, Any]) -> None:
     if not TELEGRAM_CHAT_ID:
         return
+    wait_until_signal_entry(signal)
     attempt = int(signal.get("attempt", 0))
     text = (
         f"Зашел на перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%"
@@ -2503,6 +2516,7 @@ def _generate_best_signal(excluded_pairs: Optional[set[str]] = None) -> Optional
 def send_entry_confirmation(signal: dict[str, Any]) -> None:
     if not TELEGRAM_CHAT_ID:
         return
+    wait_until_signal_entry(signal)
     attempt = int(signal.get("attempt", 0))
     text = (
         f"Зашел на перекрытие {attempt}/{MAX_OVERLAYS} • ставка {overlay_stake_percent(attempt)}%"
