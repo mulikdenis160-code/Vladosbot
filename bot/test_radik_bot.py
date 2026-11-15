@@ -1,5 +1,7 @@
 import unittest
 from copy import deepcopy
+from pathlib import Path
+import re
 from unittest.mock import patch
 
 from bot import radik_bot as bot
@@ -19,6 +21,19 @@ def signal(attempt: int = 0) -> dict:
         "reason": "test",
         "expires_at": 10,
     }
+
+
+class EntrypointTests(unittest.TestCase):
+    def test_script_uses_only_the_final_main_guard(self):
+        source = Path(__file__).with_name("radik_bot.py").read_text(encoding="utf-8")
+        guards = list(re.finditer(r'^if __name__ == "__main__":$', source, re.MULTILINE))
+
+        self.assertEqual(len(guards), 1)
+        self.assertGreater(
+            guards[0].start(),
+            source.rfind("def main() -> None:"),
+            "the script must not start a stale copy before the final definitions",
+        )
 
 
 class OverlayAndPauseTests(unittest.TestCase):

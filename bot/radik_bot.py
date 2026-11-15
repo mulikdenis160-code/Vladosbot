@@ -1554,8 +1554,7 @@ def main() -> None:
     app.run(host="0.0.0.0", port=API_PORT, debug=False, use_reloader=False)
 
 
-if __name__ == "__main__":
-    main()#!/usr/bin/env python3
+#!/usr/bin/env python3
 """RADIK AI BOT: Pocket Option WebSocket market scanner.
 
 This is the service core extracted from the source repository. It deliberately
