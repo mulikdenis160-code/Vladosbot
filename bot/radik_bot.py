@@ -633,10 +633,13 @@ def wait_until_signal_entry(signal: dict[str, Any]) -> None:
         time.sleep(min(remaining, 1.0))
 
 
-def signal_telegram_text(signal: dict[str, Any]) -> str:
+def signal_telegram_text(
+    signal: dict[str, Any], remaining: Optional[int] = None
+) -> str:
     pair = signal["pair"].replace(" ", "").upper()
     direction = "вверх" if signal["direction"] == "ВГОРУ" else "вниз"
-    remaining = seconds_until_entry(signal.get("entry_at"))
+    if remaining is None:
+        remaining = seconds_until_entry(signal.get("entry_at"))
     entry_line = (
         f"Захожу с новой свечи через {remaining} сек."
         if remaining is not None else "Захожу с новой свечи."
@@ -2135,34 +2138,19 @@ def send_signal_to_telegram(
             signal["entry_at"] = next_candle_start(time.time())
             persist_signal_state()
         attempt = int(signal.get("attempt", 0))
+        displayed_seconds = seconds_until_entry(signal.get("entry_at"))
         delivery = telegram_request(
-            "/send-message", {"text": signal_telegram_text(signal)}
+            "/send-message",
+            {"text": signal_telegram_text(signal, displayed_seconds)},
         )
-        # A slow Telegram request can consume the countdown after the text was
-        # composed. If so, move entry forward and correct the delivered text;
-        # never let the scheduler confirm entry immediately after the signal.
-        entry_at = signal.get("entry_at")
-        if (
-            entry_at is not None
-            and float(entry_at) - time.time() < SIGNAL_ENTRY_NOTICE_SEC
-        ):
-            signal["entry_at"] = next_candle_start(time.time() + 10)
+        # Start the displayed countdown after Telegram accepts the signal.
+        # Network delay must not be deducted from the time the user sees.
+        if signal.get("entry_at") is not None and displayed_seconds is not None:
+            signal["entry_at"] = max(
+                float(signal["entry_at"]),
+                time.time() + displayed_seconds,
+            )
             persist_signal_state()
-            message_id = delivery.get("message_id")
-            if message_id is not None:
-                try:
-                    telegram_request(
-                        "/edit-message",
-                        {
-                            "message_id": message_id,
-                            "text": signal_telegram_text(signal),
-                        },
-                    )
-                except Exception as exc:
-                    log.warning(
-                        "Не удалось обновить отсчёт после задержки отправки: %s",
-                        type(exc).__name__,
-                    )
     log.info(
         "Сигнал %s (попытка %s) подтверждён Telegram message_id=%s",
         signal["pair"], attempt + 1, delivery.get("message_id", "невідомо"),

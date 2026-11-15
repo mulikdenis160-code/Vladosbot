@@ -62,18 +62,6 @@ const server = http.createServer(async (request, response) => {
       });
       return send(response, 200, { ok: true, message_id: result.message_id });
     }
-    if (request.method === "POST" && request.url === "/edit-message") {
-      const result = await telegram("/editMessageText", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          chat_id: process.env.TELEGRAM_CHAT_ID,
-          message_id: body.message_id,
-          text: body.text,
-        }),
-      });
-      return send(response, 200, { ok: true, message_id: result.message_id });
-    }
     if (request.method === "POST" && request.url === "/send-photo") {
       if (body.image_url) {
         const result = await telegram("/sendPhoto", {

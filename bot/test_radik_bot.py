@@ -594,7 +594,7 @@ class OverlayAndPauseTests(unittest.TestCase):
         finally:
             bot.SIGNAL_DURATION_SEC = original_duration
 
-    def test_slow_signal_delivery_defers_and_edits_entry_countdown(self):
+    def test_signal_delivery_delay_preserves_displayed_wait(self):
         current = signal(0)
         current["entry_at"] = 1_040
         clock = [1_000]
@@ -611,9 +611,9 @@ class OverlayAndPauseTests(unittest.TestCase):
         with patch("bot.radik_bot.time.time", side_effect=lambda: clock[0]):
             bot.send_signal_to_telegram(current)
 
-        self.assertEqual([path for path, _ in requests], ["/send-message", "/edit-message"])
-        self.assertGreater(current["entry_at"], clock[0] + bot.SIGNAL_ENTRY_NOTICE_SEC)
-        self.assertIn("через", requests[1][1]["text"])
+        self.assertEqual([path for path, _ in requests], ["/send-message"])
+        self.assertIn("через 40 сек.", requests[0][1]["text"])
+        self.assertEqual(current["entry_at"], 1_085)
 
     def test_overlay_signal_identifies_attempt_and_stake(self):
         requests = []
