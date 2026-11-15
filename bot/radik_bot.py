@@ -745,7 +745,7 @@ def send_session_started_to_telegram() -> None:
         return
     telegram_request(
         "/send-message",
-        {"text": "Всем привет! Начинаю сессию. Ищу валютную пару, подбираю хорошую ситуацию."},
+        {"text": "Начинаю сессию. Ищу валютную пару, подбираю хорошую ситуацию."},
     )
 
 
