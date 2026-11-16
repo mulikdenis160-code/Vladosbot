@@ -28,3 +28,31 @@ mtime_ms = 1787444529420
 storage_uri = "gcs://replit-rams-assets-archer/rams/assets/repl:d7fe2279-2f64-43f1-abee-e4a2565672e7/a6d1e9f8-02a0-47e8-91a1-b2c69e28eb51/a34dbf5e-c929-4271-aeb8-54808e89dd24"
 storage_version_token = "1787444530690475"
 content_type = "text/plain"
+
+[[outputs]]
+id = "P6-S5jY-i_jeJJ0fpZFIz"
+uri = "file://bot/radik_bot.py"
+type = "unspecified"
+title = "Полный файл RADIK AI BOT"
+description = "Полный исходный файл бота с исправленным отсчётом до входа и приветствием без «Всем Привет!»; секреты не включены."
+logical_id = "ee003333-cd4a-4551-8ce1-9a8ccc96d436"
+content_hash = "sha256:a2119e02a927fb4ffbe0c5d2c0df9bc943e6154c6d9396d48eecaa1dbcfd01e5"
+size = 126290
+mtime_ms = 1794761237387
+storage_uri = "gcs://replit-rams-assets-archer/rams/assets/repl:d7fe2279-2f64-43f1-abee-e4a2565672e7/ee003333-cd4a-4551-8ce1-9a8ccc96d436/7cdffd1b-b58c-4c4b-a551-54f9779174d3"
+storage_version_token = "1794842955356680"
+content_type = "application/octet-stream"
+
+[[outputs]]
+id = "yBdopnz5755DeANUepPTr"
+uri = "file://bot/session-settings-19-00.env.example"
+type = "unspecified"
+title = "Настройки сессии на 19:00"
+description = "Шаблон настроек для канала -1004331252612, сессии 19:00–20:00 Europe/Kyiv на 16 ноября 2026 года. Впишите секреты только в защищённые переменные среды."
+logical_id = "ecae2fc7-5caf-4c74-ba6e-ac9cde3d6d8c"
+content_hash = "sha256:9639b81f07952a4589ef31a001f7e4b117d3fcdd2cfbdc7fe53897305efc777a"
+size = 306
+mtime_ms = 1794842945667
+storage_uri = "gcs://replit-rams-assets-archer/rams/assets/repl:d7fe2279-2f64-43f1-abee-e4a2565672e7/ecae2fc7-5caf-4c74-ba6e-ac9cde3d6d8c/a2b7e1d7-e750-425c-b1a6-698fd6f082ef"
+storage_version_token = "1794842956097283"
+content_type = "application/octet-stream"
