@@ -33,14 +33,14 @@ content_type = "text/plain"
 id = "P6-S5jY-i_jeJJ0fpZFIz"
 uri = "file://bot/radik_bot.py"
 type = "unspecified"
-title = "Полный файл RADIK AI BOT"
-description = "Полный исходный файл бота с исправленным отсчётом до входа и приветствием без «Всем Привет!»; секреты не включены."
+title = "Скачать полный файл RADIK AI BOT"
+description = "Полный файл бота с исправленным отсчётом и приветствием без «Всем Привет!». Секреты не включены."
 logical_id = "ee003333-cd4a-4551-8ce1-9a8ccc96d436"
 content_hash = "sha256:a2119e02a927fb4ffbe0c5d2c0df9bc943e6154c6d9396d48eecaa1dbcfd01e5"
 size = 126290
 mtime_ms = 1794761237387
-storage_uri = "gcs://replit-rams-assets-archer/rams/assets/repl:d7fe2279-2f64-43f1-abee-e4a2565672e7/ee003333-cd4a-4551-8ce1-9a8ccc96d436/7cdffd1b-b58c-4c4b-a551-54f9779174d3"
-storage_version_token = "1794842955356680"
+storage_uri = "gcs://replit-rams-assets-archer/rams/assets/repl:d7fe2279-2f64-43f1-abee-e4a2565672e7/ee003333-cd4a-4551-8ce1-9a8ccc96d436/4a79c684-a02f-40c2-a0a5-e41d30e77b9d"
+storage_version_token = "1794844736818355"
 content_type = "application/octet-stream"
 
 [[outputs]]
