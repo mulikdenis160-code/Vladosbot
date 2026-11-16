@@ -50,3 +50,6 @@ Thumbs.db
 
 # Generated NomadHost transfer bundle
 /deploy/nomadhost/radik-ai-bot-nomadhost.tar.gz
+
+# Generated downloadable bundles
+/generated-artifacts/

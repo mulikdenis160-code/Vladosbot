@@ -56,3 +56,17 @@ mtime_ms = 1794845505271
 storage_uri = "gcs://replit-rams-assets-archer/rams/assets/repl:d7fe2279-2f64-43f1-abee-e4a2565672e7/ecae2fc7-5caf-4c74-ba6e-ac9cde3d6d8c/37345375-bf2f-4def-905a-dbb7c3b64ffd"
 storage_version_token = "1794845516348608"
 content_type = "application/octet-stream"
+
+[[outputs]]
+id = "YjsY4jM45cX7t2PUm8_TV"
+uri = "file://generated-artifacts/RADIK_AI_BOT_COPY.zip"
+type = "unspecified"
+title = "Скачать полный архив бота для копирования"
+description = "В архиве полный исходный код, Telegram-мост, зависимости, тесты, изображения и шаблон настроек 19:00–21:00 Europe/Kyiv. Секреты не включены."
+logical_id = "414fff84-b5c7-45e3-bffd-fa19a7a5b08e"
+content_hash = "sha256:89b4af4c268b418857834c7201cb237452d5a29128167b2521732af686cdf67c"
+size = 469724
+mtime_ms = 1794856123057
+storage_uri = "gcs://replit-rams-assets-archer/rams/assets/repl:d7fe2279-2f64-43f1-abee-e4a2565672e7/414fff84-b5c7-45e3-bffd-fa19a7a5b08e/ad3e6ce9-cca0-48cc-a171-2a5d4630ca1a"
+storage_version_token = "1794856135838550"
+content_type = "application/octet-stream"
